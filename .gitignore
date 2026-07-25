@@ -16,3 +16,6 @@ obj/
 # OS
 Thumbs.db
 .DS_Store
+
+# Git Portable
+PortableGit/
