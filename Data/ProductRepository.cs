@@ -38,7 +38,10 @@ public sealed class ProductRepository
                 g.Disponibile,
                 s.ScortaMinima,
                 s.ScortaMassima,
-                s.LottoRiordino
+                s.LottoRiordino,
+                af.IdFornitore,
+                af.CodiceArticoloFornitore,
+                f.Fornitore AS SupplierName
             FROM dbo.tabBarcode AS b
             INNER JOIN dbo.tabArticoli AS a
                 ON a.idArticolo = b.idArticolo
@@ -48,6 +51,11 @@ public sealed class ProductRepository
             LEFT JOIN dbo.TabScortaArticoliView AS s
                 ON s.idArticolo = a.idArticolo
                AND s.idMagazzino = @warehouseId
+            LEFT JOIN dbo.TabArticoliFornitori AS af
+                ON af.IdArticolo = a.idArticolo
+               AND af.Predefinito = 1
+            LEFT JOIN dbo.ListaFornitori AS f
+                ON f.ID = af.IdFornitore
             WHERE LTRIM(RTRIM(b.Barcode)) = @barcode
             ORDER BY a.idArticolo;
             """;
@@ -87,9 +95,12 @@ public sealed class ProductRepository
             Season = "",
             Year = "",
             Location = "",
-            SupplierId = 0L,
-            SupplierName = "",
-            SupplierArticleCode = "",
+
+            SupplierId = GetInt64(reader, "IdFornitore"),
+            SupplierName = GetString(reader, "SupplierName"),
+            SupplierArticleCode =
+                GetString(reader, "CodiceArticoloFornitore"),
+
             CoverImagePath = ""
         };
     }
@@ -139,7 +150,9 @@ public sealed class ProductRepository
             reader.GetValue(ordinal),
             CultureInfo.InvariantCulture);
 
-        return value.ToString("0.#####", CultureInfo.InvariantCulture);
+        return value.ToString(
+            "0.#####",
+            CultureInfo.InvariantCulture);
     }
 
     private static string GetNullableStockValue(
@@ -162,6 +175,8 @@ public sealed class ProductRepository
             return "";
         }
 
-        return value.ToString("0.#####", CultureInfo.InvariantCulture);
+        return value.ToString(
+            "0.#####",
+            CultureInfo.InvariantCulture);
     }
 }
