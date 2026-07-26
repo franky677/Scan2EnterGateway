@@ -34,8 +34,11 @@ public sealed class ProductRepository
                 a.CodiceArticolo,
                 a.Descrizione,
                 b.Barcode,
+                a.AliquotaIva,
                 a.Stagione_Anno,
                 a.Stagione_Periodicita,
+                price.Imponibile,
+                price.PrezzoVendita,
                 g.Giacenza,
                 g.Disponibile,
                 s.ScortaMinima,
@@ -64,9 +67,27 @@ public sealed class ProductRepository
                AND ua.IdUbicazione >= 0
             LEFT JOIN dbo.tabUbicazioni AS u
                 ON u.IdUbicazione = ua.IdUbicazione
+            OUTER APPLY
+            (
+                SELECT TOP (1)
+                    pv.Imponibile,
+                    pv.PrezzoVendita
+                FROM dbo.tabPrezziVendita AS pv
+                INNER JOIN dbo.TabTipoListini AS tl
+                    ON tl.IdListino = pv.IdListino
+                WHERE pv.IdArticolo = a.idArticolo
+                AND ISNULL(pv.idVariante1, -1) = -1
+                AND ISNULL(pv.idVariante2, -1) = -1
+                AND ISNULL(pv.idVariante3, -1) = -1
+                  AND tl.NomeListino = N'3-AL PUBBLICO'
+                ORDER BY
+                    tl.predefinito DESC,
+                    pv.DataAgg DESC,
+                    pv.OraAgg DESC
+            ) AS price
             WHERE LTRIM(RTRIM(b.Barcode)) = @barcode
             ORDER BY
-                ua.dataAgg DESC,
+                ua.DataAgg DESC,
                 a.idArticolo;
             """;
 
@@ -93,9 +114,9 @@ public sealed class ProductRepository
             Description = GetString(reader, "Descrizione"),
             Barcode = GetString(reader, "Barcode"),
 
-            TaxablePrice = "",
-            VatRate = "",
-            PublicPrice = "",
+            TaxablePrice = GetNumberAsString(reader, "Imponibile"),
+            VatRate = GetNumberAsString(reader, "AliquotaIva"),
+            PublicPrice = GetNumberAsString(reader, "PrezzoVendita"),
 
             Season = GetString(reader, "Stagione_Periodicita"),
             Year = GetString(reader, "Stagione_Anno"),
