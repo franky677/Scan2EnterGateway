@@ -34,6 +34,8 @@ public sealed class ProductRepository
                 a.CodiceArticolo,
                 a.Descrizione,
                 b.Barcode,
+                a.Stagione_Anno,
+                a.Stagione_Periodicita,
                 g.Giacenza,
                 g.Disponibile,
                 s.ScortaMinima,
@@ -41,7 +43,8 @@ public sealed class ProductRepository
                 s.LottoRiordino,
                 af.IdFornitore,
                 af.CodiceArticoloFornitore,
-                f.Fornitore AS SupplierName
+                f.Fornitore AS SupplierName,
+                u.Ubicazione AS Location
             FROM dbo.tabBarcode AS b
             INNER JOIN dbo.tabArticoli AS a
                 ON a.idArticolo = b.idArticolo
@@ -56,8 +59,15 @@ public sealed class ProductRepository
                AND af.Predefinito = 1
             LEFT JOIN dbo.ListaFornitori AS f
                 ON f.ID = af.IdFornitore
+            LEFT JOIN dbo.tabUbicazioniArticoli AS ua
+                ON ua.IdArticolo = a.idArticolo
+               AND ua.IdUbicazione >= 0
+            LEFT JOIN dbo.tabUbicazioni AS u
+                ON u.IdUbicazione = ua.IdUbicazione
             WHERE LTRIM(RTRIM(b.Barcode)) = @barcode
-            ORDER BY a.idArticolo;
+            ORDER BY
+                ua.dataAgg DESC,
+                a.idArticolo;
             """;
 
         await using var connection = new SqlConnection(_connectionString);
@@ -83,18 +93,19 @@ public sealed class ProductRepository
             Description = GetString(reader, "Descrizione"),
             Barcode = GetString(reader, "Barcode"),
 
+            TaxablePrice = "",
+            VatRate = "",
+            PublicPrice = "",
+
+            Season = GetString(reader, "Stagione_Periodicita"),
+            Year = GetString(reader, "Stagione_Anno"),
+            Location = GetString(reader, "Location"),
+
             Stock = GetNumberAsString(reader, "Giacenza"),
             AvailableStock = GetNumberAsString(reader, "Disponibile"),
             MinimumStock = GetNullableStockValue(reader, "ScortaMinima"),
             MaximumStock = GetNullableStockValue(reader, "ScortaMassima"),
             ReorderLot = GetNullableStockValue(reader, "LottoRiordino"),
-
-            TaxablePrice = "",
-            VatRate = "",
-            PublicPrice = "",
-            Season = "",
-            Year = "",
-            Location = "",
 
             SupplierId = GetInt64(reader, "IdFornitore"),
             SupplierName = GetString(reader, "SupplierName"),
