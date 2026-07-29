@@ -14,11 +14,12 @@ builder.Host.UseWindowsService(options =>
 
 var contentRoot = AppContext.BaseDirectory;
 var logDirectory = Path.Combine(contentRoot, "Logs");
-builder.Logging.AddProvider(new GatewayFileLoggerProvider(logDirectory));
+// builder.Logging.AddProvider(new GatewayFileLoggerProvider(logDirectory));
 
 builder.Services.AddSingleton<ReorderRepository>();
 builder.Services.AddSingleton<ProductRepository>();
 builder.Services.AddSingleton<LocationRepository>();
+builder.Services.AddSingleton<ProductImageRepository>();
 builder.Services.AddSingleton<GatewayRuntimeInfo>();
 
 builder.Services.AddCors(o => o.AddPolicy("Scan2Enter", p =>
@@ -84,10 +85,16 @@ app.MapGet("/", () => Results.Ok(new
         "/api/health/database",
         "/api/reorder-list",
         "/api/product/{barcode}",
+        "/api/product/{barcode}/image",
+        "PUT /api/product/{articleId}/stock",
         "/api/locations",
         "/api/product/{articleId}/locations",
         "POST /api/product/{articleId}/locations/{locationId}",
-        "DELETE /api/product/{articleId}/locations/{locationId}"
+        "DELETE /api/product/{articleId}/locations/{locationId}",
+        "POST /api/locations",
+        "PUT /api/locations/{locationId}",
+        "POST /api/locations/{locationId}/duplicate-next",
+        "DELETE /api/locations/{locationId}"
     }
 }));
 
@@ -216,6 +223,140 @@ app.MapGet("/api/product/{barcode}", async (
     }
 });
 
+
+app.MapPut("/api/product/{articleId:int}/stock", async (
+    int articleId,
+    StockSettingsRequest request,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (request.WarehouseId < 0)
+        {
+            return Results.BadRequest(new
+            {
+                updated = false,
+                message = "IdMagazzino non valido."
+            });
+        }
+
+        await repository.UpdateStockSettingsAsync(
+            articleId,
+            request.WarehouseId,
+            request.Variant1Id,
+            request.Variant2Id,
+            request.Variant3Id,
+            request.MinimumStock,
+            request.MaximumStock,
+            request.ReorderLot,
+            ct);
+
+        return Results.Ok(new
+        {
+            updated = true,
+            articleId,
+            warehouseId = request.WarehouseId,
+            variant1Id = request.Variant1Id,
+            variant2Id = request.Variant2Id,
+            variant3Id = request.Variant3Id,
+            minimumStock = request.MinimumStock,
+            maximumStock = request.MaximumStock,
+            reorderLot = request.ReorderLot
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to update stock settings",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapGet("/api/product/{barcode}/image", async (
+    string barcode,
+    ProductRepository productRepository,
+    ProductImageRepository imageRepository,
+    HttpResponse response,
+    CancellationToken ct) =>
+{
+    try
+    {
+        // Non memorizzare in cache i risultati senza immagine:
+        // appena viene aggiunta una foto, l'app potrà visualizzarla subito.
+        response.Headers["Cache-Control"] = "no-store";
+        var product = await productRepository.GetByBarcodeAsync(
+            barcode,
+            ct);
+
+        if (product is null)
+        {
+            return Results.NotFound(new
+            {
+                message = $"Barcode '{barcode}' non trovato."
+            });
+        }
+
+        var imagePath =
+            await imageRepository.GetImagePathByArticleIdAsync(
+                product.ArticleId,
+                ct);
+
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            return Results.NotFound(new
+            {
+                message =
+                    $"Nessuna immagine trovata per l'articolo {product.ArticleId}.",
+                articleId = product.ArticleId,
+                barcode
+            });
+        }
+
+        if (!System.IO.File.Exists(imagePath))
+        {
+            return Results.NotFound(new
+            {
+                message =
+                    "L'immagine è registrata nel database, ma il file non esiste.",
+                articleId = product.ArticleId,
+                fileName = Path.GetFileName(imagePath)
+            });
+        }
+
+        var extension = Path.GetExtension(imagePath).ToLowerInvariant();
+
+        var contentType = extension switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            _ => "application/octet-stream"
+        };
+
+        // Le immagini esistenti possono essere conservate nella cache
+        // del dispositivo per 30 giorni.
+        response.Headers["Cache-Control"] =
+            "public, max-age=2592000";
+
+        return Results.File(
+            imagePath,
+            contentType: contentType,
+            fileDownloadName: null,
+            enableRangeProcessing: true);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to read product image",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 app.MapGet("/api/locations", async (
     LocationRepository repository,
     CancellationToken ct) =>
@@ -230,6 +371,186 @@ app.MapGet("/api/locations", async (
     {
         return Results.Problem(
             title: "Unable to read locations",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapPost("/api/locations", async (
+    HttpRequest request,
+    LocationRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        using var document = await System.Text.Json.JsonDocument.ParseAsync(
+            request.Body,
+            cancellationToken: ct);
+
+        var name = document.RootElement.TryGetProperty("name", out var value)
+            ? value.GetString()?.Trim().ToUpperInvariant()
+            : null;
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Il nome dell'ubicazione è obbligatorio."
+            });
+        }
+
+        var location = await repository.CreateLocationAsync(name, ct);
+
+        return Results.Ok(new
+        {
+            created = true,
+            location
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to create location",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPut("/api/locations/{locationId:int}", async (
+    int locationId,
+    HttpRequest request,
+    LocationRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        using var document = await System.Text.Json.JsonDocument.ParseAsync(
+            request.Body,
+            cancellationToken: ct);
+
+        var name = document.RootElement.TryGetProperty("name", out var value)
+            ? value.GetString()?.Trim().ToUpperInvariant()
+            : null;
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Il nome dell'ubicazione è obbligatorio."
+            });
+        }
+
+        var result = await repository.RenameLocationAsync(locationId, name, ct);
+
+        return result.Status switch
+        {
+            LocationRenameStatus.NotFound => Results.NotFound(new
+            {
+                renamed = false,
+                message = "Ubicazione non trovata."
+            }),
+
+            LocationRenameStatus.Duplicate => Results.Conflict(new
+            {
+                renamed = false,
+                message = "Esiste già un'ubicazione con questo nome.",
+                location = result.Location
+            }),
+
+            _ => Results.Ok(new
+            {
+                renamed = true,
+                message = "Ubicazione rinominata.",
+                location = result.Location
+            })
+        };
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to rename location",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapPost("/api/locations/{locationId:int}/duplicate-next", async (
+    int locationId,
+    LocationRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var location = await repository.DuplicateNextLocationAsync(locationId, ct);
+
+        if (location is null)
+        {
+            return Results.NotFound(new
+            {
+                created = false,
+                message = "Ubicazione non trovata."
+            });
+        }
+
+        return Results.Ok(new
+        {
+            created = true,
+            message = "Ubicazione successiva creata.",
+            location
+        });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new
+        {
+            created = false,
+            message = ex.Message
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to duplicate next location",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapDelete("/api/locations/{locationId:int}", async (
+    int locationId,
+    LocationRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var usageCount = await repository.GetLocationUsageCountAsync(locationId, ct);
+
+        if (usageCount > 0)
+        {
+            return Results.Conflict(new
+            {
+                deleted = false,
+                usageCount,
+                message = $"Ubicazione utilizzata da {usageCount} articoli."
+            });
+        }
+
+        var deleted = await repository.DeleteLocationAsync(locationId, ct);
+
+        return Results.Ok(new
+        {
+            deleted,
+            usageCount = 0,
+            message = deleted
+                ? "Ubicazione eliminata."
+                : "Ubicazione non trovata."
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to delete location",
             detail: ex.Message,
             statusCode: 500);
     }
@@ -334,6 +655,16 @@ app.MapDelete(
     });
 
 app.Run();
+
+sealed record StockSettingsRequest(
+    int WarehouseId = 0,
+    int Variant1Id = -1,
+    int Variant2Id = -1,
+    int Variant3Id = -1,
+    decimal? MinimumStock = null,
+    decimal? MaximumStock = null,
+    decimal? ReorderLot = null);
+
 sealed class GatewayRuntimeInfo
 {
     private long _requestCount;

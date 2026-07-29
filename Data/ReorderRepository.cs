@@ -139,6 +139,122 @@ ORDER BY
         return items;
     }
 
+
+    public async Task UpdateStockSettingsAsync(
+        int articleId,
+        int warehouseId,
+        int variant1Id,
+        int variant2Id,
+        int variant3Id,
+        decimal? minimumStock,
+        decimal? maximumStock,
+        decimal? reorderLot,
+        CancellationToken ct)
+    {
+        static decimal DbValue(decimal? value) => value ?? -1m;
+
+        const string sql = """
+SET XACT_ABORT ON;
+
+UPDATE dbo.tabArticoli
+SET
+    ScortaMinima = @minimumStock,
+    ScortaMassima = @maximumStock,
+    LottoRiordino = @reorderLot
+WHERE IdArticolo = @articleId;
+
+UPDATE dbo.tabArticoli_Varianti
+SET
+    ScortaMinima = @minimumStock,
+    ScortaMassima = @maximumStock,
+    LottoRiordino = @reorderLot
+WHERE IdArticolo = @articleId
+  AND ISNULL(IdVariante1, -1) = @variant1Id
+  AND ISNULL(IdVariante2, -1) = @variant2Id
+  AND ISNULL(IdVariante3, -1) = @variant3Id;
+
+IF EXISTS
+(
+    SELECT 1
+    FROM dbo.tabScortaArticoli
+    WHERE IdArticolo = @articleId
+      AND IdMagazzino = @warehouseId
+      AND IdVariante1 = @variant1Id
+      AND IdVariante2 = @variant2Id
+      AND IdVariante3 = @variant3Id
+)
+BEGIN
+    UPDATE dbo.tabScortaArticoli
+    SET
+        ScortaMinima = @minimumStock,
+        ScortaMassima = @maximumStock,
+        LottoRiordino = @reorderLot
+    WHERE IdArticolo = @articleId
+      AND IdMagazzino = @warehouseId
+      AND IdVariante1 = @variant1Id
+      AND IdVariante2 = @variant2Id
+      AND IdVariante3 = @variant3Id;
+END
+ELSE
+BEGIN
+    INSERT INTO dbo.tabScortaArticoli
+    (
+        IdArticolo,
+        IdMagazzino,
+        IdVariante1,
+        IdVariante2,
+        IdVariante3,
+        ScortaMinima,
+        ScortaMassima,
+        LottoRiordino
+    )
+    VALUES
+    (
+        @articleId,
+        @warehouseId,
+        @variant1Id,
+        @variant2Id,
+        @variant3Id,
+        @minimumStock,
+        @maximumStock,
+        @reorderLot
+    );
+END;
+""";
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+
+        try
+        {
+            await using var command = new SqlCommand(sql, connection, (SqlTransaction)transaction);
+            command.Parameters.AddWithValue("@articleId", articleId);
+            command.Parameters.AddWithValue("@warehouseId", warehouseId);
+            command.Parameters.AddWithValue("@variant1Id", variant1Id);
+            command.Parameters.AddWithValue("@variant2Id", variant2Id);
+            command.Parameters.AddWithValue("@variant3Id", variant3Id);
+            command.Parameters.AddWithValue("@minimumStock", DbValue(minimumStock));
+            command.Parameters.AddWithValue("@maximumStock", DbValue(maximumStock));
+            command.Parameters.AddWithValue("@reorderLot", DbValue(reorderLot));
+
+            var affectedRows = await command.ExecuteNonQueryAsync(ct);
+
+            if (affectedRows <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"Nessun record aggiornato per l'articolo {articleId}.");
+            }
+
+            await transaction.CommitAsync(ct);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
     private static bool NeedsReorder(
         decimal? stock,
         decimal? available,
