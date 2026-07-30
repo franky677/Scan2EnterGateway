@@ -42,7 +42,9 @@ app.Lifetime.ApplicationStopped.Register(() =>
     startupLogger.LogInformation("Gateway arrestato."));
 
 app.UseCors("Scan2Enter");
+app.UseDefaultFiles();
 
+app.UseStaticFiles();
 app.Use(async (context, next) =>
 {
     var requestRuntimeInfo = context.RequestServices.GetRequiredService<GatewayRuntimeInfo>();
@@ -190,6 +192,41 @@ app.MapGet("/api/reorder-list", async (
     {
         return Results.Problem(
             title: "Unable to read reorder list",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapGet("/api/public/product/{barcode}", async (
+    string barcode,
+    ProductRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var product = await repository.GetByBarcodeAsync(
+            barcode,
+            ct);
+
+        if (product is null)
+        {
+            return Results.NotFound(new
+            {
+                found = false
+            });
+        }
+
+        return Results.Ok(new
+        {
+            found = true,
+            description = product.Description,
+            price = product.PublicPrice
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to read public product",
             detail: ex.Message,
             statusCode: 500);
     }
