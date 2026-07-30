@@ -25,19 +25,25 @@ public sealed class ProductImageRepository
 
         const string sql = """
             SELECT TOP (1)
-                percorsoImmagine
-            FROM dbo.tabImmaginiProdotti
-            WHERE idArticolo = @articleId
-              AND NULLIF(LTRIM(RTRIM(percorsoImmagine)), '') IS NOT NULL
-            ORDER BY
-                CASE
-                    WHEN ISNULL(idVariante1, -1) = -1
-                     AND ISNULL(idVariante2, -1) = -1
-                     AND ISNULL(idVariante3, -1) = -1
-                    THEN 0
-                    ELSE 1
-                END,
-                idImmagine DESC;
+                ImagePath
+            FROM
+            (
+                SELECT
+                    0 AS Priority,
+                    NULLIF(LTRIM(RTRIM(a.Immagine)), '') AS ImagePath
+                FROM dbo.tabArticoli a
+                WHERE a.idArticolo = @articleId
+
+                UNION ALL
+
+                SELECT
+                    1 AS Priority,
+                    NULLIF(LTRIM(RTRIM(i.percorsoImmagine)), '') AS ImagePath
+                FROM dbo.tabImmaginiProdotti i
+                WHERE i.idArticolo = @articleId
+            ) Images
+            WHERE ImagePath IS NOT NULL
+            ORDER BY Priority;
             """;
 
         await using var connection =
