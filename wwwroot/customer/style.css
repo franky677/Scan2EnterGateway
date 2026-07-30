@@ -1,0 +1,177 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #f2f2f2;
+    color: #111111;
+}
+
+.page {
+    width: min(100%, 520px);
+    margin: 0 auto;
+    padding: 24px 16px 40px;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 34px;
+}
+
+.header p {
+    margin: 8px 0 0;
+    font-size: 17px;
+}
+
+.scanner-card,
+.result-card {
+    background: white;
+    border-radius: 18px;
+    padding: 20px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.10);
+}
+
+.scanner-placeholder {
+    min-height: 160px;
+    margin-bottom: 22px;
+    border: 3px dashed #777777;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.scanner-icon {
+    font-size: 54px;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.barcode-row {
+    display: flex;
+    gap: 10px;
+}
+
+input {
+    min-width: 0;
+    flex: 1;
+    padding: 15px;
+    border: 2px solid #777777;
+    border-radius: 12px;
+    font-size: 18px;
+}
+
+button {
+    padding: 15px 20px;
+    border: 0;
+    border-radius: 12px;
+    background: #111111;
+    color: white;
+    font-size: 17px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.result-card {
+    margin-top: 20px;
+    text-align: center;
+}
+
+.description {
+    margin: 0;
+    font-size: 23px;
+    line-height: 1.3;
+    font-weight: 700;
+}
+
+.price {
+    margin: 20px 0 0;
+    font-size: 48px;
+    font-weight: 800;
+}
+
+.message {
+    min-height: 24px;
+    margin: 18px 0 0;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.hidden {
+    display: none;
+}
+.camera-box {
+    position: relative;
+    width: 100%;
+    min-height: 260px;
+    margin-bottom: 14px;
+    overflow: hidden;
+    border-radius: 16px;
+    background: #111111;
+}
+
+#camera {
+    display: none;
+    width: 100%;
+    height: 260px;
+    object-fit: cover;
+}
+
+.camera-placeholder {
+    min-height: 260px;
+    border: 3px dashed #777777;
+    border-radius: 16px;
+    color: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    text-align: center;
+    font-size: 19px;
+    font-weight: 700;
+}
+
+.camera-buttons {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 22px;
+}
+
+.camera-buttons button {
+    flex: 1;
+}
+
+.secondary-button {
+    background: #dddddd;
+    color: #111111;
+}
+
+.scan-line {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 8%;
+    width: 84%;
+    height: 3px;
+    background: #ffffff;
+    box-shadow: 0 0 8px #ffffff;
+}

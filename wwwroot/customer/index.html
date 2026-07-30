@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111111">
+
+    <title>Scan2Enter Cliente</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <main class="page">
+        <header class="header">
+            <h1>Scan2Enter</h1>
+            <p>Controlla il prezzo di un prodotto</p>
+        </header>
+
+        <section class="scanner-card">
+           <div class="camera-box">
+    <video id="camera" autoplay playsinline muted></video>
+
+    <div id="camera-placeholder" class="camera-placeholder">
+        <span class="scanner-icon">▣</span>
+        <span>Premi per avviare la fotocamera</span>
+    </div>
+
+    <div class="scan-line"></div>
+</div>
+
+<div class="camera-buttons">
+    <button id="start-camera" type="button">
+        Avvia fotocamera
+    </button>
+
+    <button id="stop-camera" type="button" class="secondary-button hidden">
+        Chiudi fotocamera
+    </button>
+</div>
+
+            <form id="barcode-form">
+                <label for="barcode">Codice a barre</label>
+
+                <div class="barcode-row">
+                    <input
+                        id="barcode"
+                        name="barcode"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="Inserisci il barcode"
+                        required>
+
+                    <button type="submit">Cerca</button>
+                </div>
+            </form>
+        </section>
+
+        <section id="result" class="result-card hidden">
+            <p id="description" class="description"></p>
+            <p id="price" class="price"></p>
+        </section>
+
+        <p id="message" class="message"></p>
+    </main>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
