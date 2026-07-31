@@ -64,8 +64,24 @@
             <p id="price" class="price"></p>
         </section>
 
-        <p id="message" class="message"></p>
+        <p id="message" class="message"></p><section id="history-card" class="result-card hidden">
+    <h2>Cronologia</h2>
+
+    <div id="history-list"></div>
+</section>
+
     </main>
+<nav class="bottom-nav">
+
+    <button id="nav-home" class="nav-button active">
+        🏠 Home
+    </button>
+
+    <button id="nav-history" class="nav-button">
+        🕘 Cronologia
+    </button>
+
+</nav>
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <script src="app.js"></script>
 </body>

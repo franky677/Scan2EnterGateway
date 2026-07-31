@@ -4,13 +4,19 @@ const resultCard = document.getElementById("result");
 const descriptionElement = document.getElementById("description");
 const priceElement = document.getElementById("price");
 const messageElement = document.getElementById("message");
+const historyCard = document.getElementById("history-card");
+const historyList = document.getElementById("history-list");
 
 const cameraElement = document.getElementById("camera");
 const cameraPlaceholder = document.getElementById("camera-placeholder");
 const startCameraButton = document.getElementById("start-camera");
 const stopCameraButton = document.getElementById("stop-camera");
 const scanLine = document.querySelector(".scan-line");
+const homeButton = document.getElementById("nav-home");
+const historyButton = document.getElementById("nav-history");
 
+const scannerCard =
+    document.querySelector(".scanner-card");
 let codeReader = null;
 let cameraControls = null;
 let lastScannedBarcode = "";
@@ -174,6 +180,7 @@ async function searchProduct(barcode) {
         priceElement.textContent = formatPrice(product.price);
 
         resultCard.classList.remove("hidden");
+saveToHistory(product, barcode);
         showMessage("Prodotto trovato.");
     } catch (error) {
         console.error(error);
@@ -225,3 +232,82 @@ function showMessage(message) {
 }
 
 window.addEventListener("beforeunload", stopCamera);
+
+function saveToHistory(product, barcode) {
+
+    let history =
+        JSON.parse(localStorage.getItem("history") || "[]");
+
+    history = history.filter(
+        item => item.barcode !== barcode
+    );
+
+    history.unshift({
+        barcode: barcode,
+        description: product.description,
+        price: product.price
+    });
+
+    history = history.slice(0, 10);
+
+    localStorage.setItem(
+        "history",
+        JSON.stringify(history)
+    );
+
+    renderHistory();
+}
+
+function renderHistory() {
+
+    const history =
+        JSON.parse(localStorage.getItem("history") || "[]");
+
+    if (history.length === 0) {
+        historyCard.classList.add("hidden");
+        return;
+    }
+
+    historyCard.classList.remove("hidden");
+
+    historyList.innerHTML = history
+        .map(item => `
+            <div class="history-item"
+                 onclick="searchProduct('${item.barcode}')">
+
+                <div>${item.description}</div>
+
+                <strong>${formatPrice(item.price)}</strong>
+
+            </div>
+        `)
+        .join("");
+}
+
+renderHistory();
+
+homeButton.addEventListener("click", () => {
+
+    scannerCard.classList.remove("hidden");
+
+    resultCard.classList.remove("hidden");
+
+    historyCard.classList.add("hidden");
+
+    homeButton.classList.add("active");
+
+    historyButton.classList.remove("active");
+});
+
+historyButton.addEventListener("click", () => {
+
+    scannerCard.classList.add("hidden");
+
+    resultCard.classList.add("hidden");
+
+    historyCard.classList.remove("hidden");
+
+    historyButton.classList.add("active");
+
+    homeButton.classList.remove("active");
+});
