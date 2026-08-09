@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Threading;
 using Scan2EnterGateway;
 using Scan2EnterGateway.Data;
+using Scan2EnterGateway.Models;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,6 +21,11 @@ builder.Services.AddSingleton<ReorderRepository>();
 builder.Services.AddSingleton<ProductRepository>();
 builder.Services.AddSingleton<LocationRepository>();
 builder.Services.AddSingleton<ProductImageRepository>();
+builder.Services.AddSingleton<SessionRepository>();
+builder.Services.AddSingleton<ColloRepository>();
+builder.Services.AddSingleton<LabelBitmapRenderer>();
+builder.Services.AddSingleton<WindowsLabelPrinter>();
+builder.Services.AddSingleton<GodexLabelPrinter>();
 builder.Services.AddSingleton<GatewayRuntimeInfo>();
 
 builder.Services.AddCors(o => o.AddPolicy("Scan2Enter", p =>
@@ -87,6 +93,9 @@ app.MapGet("/", () => Results.Ok(new
         "/api/health/database",
         "/api/reorder-list",
         "/api/product/{barcode}",
+        "/api/search",
+        "/api/session/history",
+        "POST /api/session/colli",
         "/api/product/{barcode}/image",
         "PUT /api/product/{articleId}/stock",
         "/api/locations",
@@ -96,7 +105,8 @@ app.MapGet("/", () => Results.Ok(new
         "POST /api/locations",
         "PUT /api/locations/{locationId}",
         "POST /api/locations/{locationId}/duplicate-next",
-        "DELETE /api/locations/{locationId}"
+        "DELETE /api/locations/{locationId}",
+        "POST /api/labels/print"
     }
 }));
 
@@ -255,6 +265,147 @@ app.MapGet("/api/product/{barcode}", async (
     {
         return Results.Problem(
             title: "Unable to read product",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/search", async (
+    string q,
+    ProductRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Specificare almeno un testo da cercare."
+            });
+        }
+
+        var results = await repository.SearchAsync(q, ct);
+
+        return Results.Ok(new
+        {
+            query = q.Trim(),
+            count = results.Count,
+            items = results
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore ricerca articoli",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/session/history", async (
+    int clientId,
+    string q,
+    SessionRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (clientId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                message = "Cliente non valido."
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Specificare articolo, codice o barcode."
+            });
+        }
+
+        var items = await repository.SearchHistoryAsync(clientId, q, ct);
+
+        return Results.Ok(new
+        {
+            clientId,
+            query = q.Trim(),
+            count = items.Count,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore ricerca storico Sessione",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPost("/api/session/colli", async (
+    CreateColloRequest request,
+    ColloRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (request.ClientId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                created = false,
+                message = "Selezionare un cliente."
+            });
+        }
+
+        if (request.Items is null || request.Items.Count == 0)
+        {
+            return Results.BadRequest(new
+            {
+                created = false,
+                message = "La sessione non contiene articoli."
+            });
+        }
+
+        if (request.Items.Any(x =>
+            string.IsNullOrWhiteSpace(x.Barcode) ||
+            x.Quantity <= 0 ||
+            x.Price < 0))
+        {
+            return Results.BadRequest(new
+            {
+                created = false,
+                message = "Barcode, quantità o prezzo non validi."
+            });
+        }
+
+        var created = await repository.CreateAsync(request, ct);
+
+        return Results.Ok(new
+        {
+            created = true,
+            collo = created
+        });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new
+        {
+            created = false,
+            message = ex.Message
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore creazione collo Sessione",
             detail: ex.Message,
             statusCode: 500);
     }
@@ -691,6 +842,124 @@ app.MapDelete(
         }
     });
 
+app.MapPost("/api/labels/print", async (
+    LabelPrintRequest request,
+    ProductRepository productRepository,
+    ProductImageRepository imageRepository,
+    GodexLabelPrinter printer,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (
+            !string.Equals(
+                request.Printer,
+                "GODEX",
+                StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return Results.BadRequest(new
+            {
+                printed = false,
+                message = "Per ora è disponibile soltanto la GoDEX G500."
+            });
+        }
+
+        if (request.Quantity is < 1 or > 100)
+        {
+            return Results.BadRequest(new
+            {
+                printed = false,
+                message = "La quantità deve essere compresa tra 1 e 100."
+            });
+        }
+
+        var template =
+            LabelGenerator.ParseTemplate(request.Template);
+
+        if (
+            template == LabelTemplate.Note &&
+            string.IsNullOrWhiteSpace(request.Note)
+        )
+        {
+            return Results.BadRequest(new
+            {
+                printed = false,
+                message = "Impossibile stampare: scrivere un testo."
+            });
+        }
+
+        var articleCode = request.ArticleCode;
+        var description = request.Description;
+        var publicPrice = request.PublicPrice;
+        string? imagePath = null;
+
+        var product =
+            await productRepository.GetByBarcodeAsync(
+                request.Barcode,
+                ct);
+
+        if (product is not null)
+        {
+            articleCode = product.ArticleCode
+                .Trim()
+                .IfBlank(request.ArticleCode);
+
+            description = product.Description
+                .Trim()
+                .IfBlank(request.Description);
+
+            publicPrice = product.PublicPrice
+                .Trim()
+                .IfBlank(request.PublicPrice);
+
+            if (LabelGenerator.RequiresImage(template))
+            {
+                imagePath =
+                    await imageRepository
+                        .GetImagePathByArticleIdAsync(
+                            product.ArticleId,
+                            ct);
+            }
+        }
+
+        var rendered = await printer.PrintAsync(
+            new LabelRenderRequest(
+                ArticleCode: articleCode,
+                Description: description,
+                Barcode: request.Barcode,
+                PublicPrice: publicPrice,
+                ImagePath: imagePath,
+                Template: template,
+                Note: request.Note),
+            request.Quantity,
+            ct);
+
+        return Results.Ok(new
+        {
+            printed = true,
+            quantity = request.Quantity,
+            requestedTemplate =
+                LabelGenerator.ToApiValue(
+                    rendered.RequestedTemplate),
+            actualTemplate =
+                LabelGenerator.ToApiValue(
+                    rendered.ActualTemplate),
+            imageUsed = rendered.ImageUsed,
+            imageFallback =
+                rendered.RequestedTemplate !=
+                rendered.ActualTemplate
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore stampa GoDEX",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 app.Run();
 
 sealed record StockSettingsRequest(
@@ -701,6 +970,28 @@ sealed record StockSettingsRequest(
     decimal? MinimumStock = null,
     decimal? MaximumStock = null,
     decimal? ReorderLot = null);
+
+sealed record LabelPrintRequest(
+    string ArticleCode,
+    string Description,
+    string Barcode,
+    string PublicPrice = "",
+    string Printer = "GODEX",
+    string Template = "STANDARD",
+    int Quantity = 1,
+    string Note = "");
+
+static class StringExtensions
+{
+    public static string IfBlank(
+        this string value,
+        string fallback)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? fallback
+            : value;
+    }
+}
 
 sealed class GatewayRuntimeInfo
 {

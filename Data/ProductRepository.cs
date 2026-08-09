@@ -137,6 +137,157 @@ public sealed class ProductRepository
         };
     }
 
+
+    public async Task<List<SearchResultDto>> SearchAsync(
+        string query,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return [];
+        }
+
+        var terms = query
+            .Split(
+                ' ',
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries)
+            .Where(term => !string.IsNullOrWhiteSpace(term))
+            .Take(8)
+            .ToArray();
+
+        if (terms.Length == 0)
+        {
+            return [];
+        }
+
+        var whereParts = new List<string>();
+
+        for (var index = 0; index < terms.Length; index++)
+        {
+            whereParts.Add($"""
+                (
+                    a.CodiceArticolo LIKE '%' + @term{index} + '%'
+                    OR a.Descrizione LIKE '%' + @term{index} + '%'
+                    OR EXISTS
+                    (
+                        SELECT 1
+                        FROM dbo.tabBarcode AS bSearch{index}
+                        WHERE bSearch{index}.idArticolo = a.idArticolo
+                          AND bSearch{index}.Barcode LIKE '%' + @term{index} + '%'
+                    )
+                )
+                """);
+        }
+
+        var sql = $"""
+            SELECT TOP (50)
+                a.idArticolo,
+                a.CodiceArticolo,
+                a.Descrizione,
+                barcode.Barcode,
+                a.Movimentato,
+                a.dataUltimoMovimento,
+                g.Giacenza,
+                price.PrezzoVendita
+            FROM dbo.tabArticoli AS a
+            LEFT JOIN dbo.tabGiacenze AS g
+                ON g.idArticolo = a.idArticolo
+               AND g.idMagazzino = @warehouseId
+            OUTER APPLY
+            (
+                SELECT TOP (1)
+                    LTRIM(RTRIM(b1.Barcode)) AS Barcode
+                FROM dbo.tabBarcode AS b1
+                WHERE b1.idArticolo = a.idArticolo
+                  AND NULLIF(LTRIM(RTRIM(b1.Barcode)), '') IS NOT NULL
+                ORDER BY
+                    CASE
+                        WHEN LEN(LTRIM(RTRIM(b1.Barcode))) = 13 THEN 0
+                        ELSE 1
+                    END,
+                    b1.Barcode
+            ) AS barcode
+            OUTER APPLY
+            (
+                SELECT TOP (1)
+                    pv.PrezzoVendita
+                FROM dbo.tabPrezziVendita AS pv
+                INNER JOIN dbo.TabTipoListini AS tl
+                    ON tl.IdListino = pv.IdListino
+                WHERE pv.IdArticolo = a.idArticolo
+                  AND ISNULL(pv.idVariante1, -1) = -1
+                  AND ISNULL(pv.idVariante2, -1) = -1
+                  AND ISNULL(pv.idVariante3, -1) = -1
+                  AND tl.NomeListino = N'3-AL PUBBLICO'
+                ORDER BY
+                    tl.predefinito DESC,
+                    pv.DataAgg DESC,
+                    pv.OraAgg DESC
+            ) AS price
+            WHERE
+                {string.Join(
+                    "\n                AND ",
+                    whereParts)}
+            ORDER BY
+                a.Movimentato DESC,
+                a.dataUltimoMovimento DESC,
+                a.Descrizione;
+            """;
+
+        var results = new List<SearchResultDto>();
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = new SqlCommand(sql, connection);
+
+        for (var index = 0; index < terms.Length; index++)
+        {
+            command.Parameters.AddWithValue(
+                $"@term{index}",
+                terms[index]);
+        }
+
+        command.Parameters.AddWithValue(
+            "@warehouseId",
+            _warehouseId);
+
+        command.CommandTimeout = 30;
+
+        await using var reader =
+            await command.ExecuteReaderAsync(cancellationToken);
+
+        var movedOrdinal =
+            reader.GetOrdinal("Movimentato");
+
+        var lastMovementOrdinal =
+            reader.GetOrdinal("dataUltimoMovimento");
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new SearchResultDto
+            {
+                Id = GetInt64(reader, "idArticolo"),
+                Code = GetString(reader, "CodiceArticolo"),
+                Description = GetString(reader, "Descrizione"),
+                Barcode = GetString(reader, "Barcode"),
+                Price = GetNumberAsString(reader, "PrezzoVendita"),
+                Stock = GetNumberAsString(reader, "Giacenza"),
+                Moved =
+                    !reader.IsDBNull(movedOrdinal) &&
+                    reader.GetBoolean(movedOrdinal),
+                LastMovement =
+                    reader.IsDBNull(lastMovementOrdinal)
+                        ? null
+                        : reader.GetDateTime(
+                            lastMovementOrdinal)
+            });
+        }
+
+        return results;
+    }
+
     private static string GetString(
         SqlDataReader reader,
         string columnName)
