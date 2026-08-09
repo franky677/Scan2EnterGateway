@@ -22,6 +22,7 @@ builder.Services.AddSingleton<ProductRepository>();
 builder.Services.AddSingleton<LocationRepository>();
 builder.Services.AddSingleton<ProductImageRepository>();
 builder.Services.AddSingleton<SessionRepository>();
+builder.Services.AddSingleton<ClientPriceRepository>();
 builder.Services.AddSingleton<ColloRepository>();
 builder.Services.AddSingleton<LabelBitmapRenderer>();
 builder.Services.AddSingleton<WindowsLabelPrinter>();
@@ -95,6 +96,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/product/{barcode}",
         "/api/search",
         "/api/session/history",
+        "/api/session/client-price",
         "POST /api/session/colli",
         "/api/product/{barcode}/image",
         "PUT /api/product/{articleId}/stock",
@@ -343,6 +345,55 @@ app.MapGet("/api/session/history", async (
     {
         return Results.Problem(
             title: "Errore ricerca storico Sessione",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/session/client-price", async (
+    int clientId,
+    string barcode,
+    ClientPriceRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (clientId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                message = "Cliente non valido."
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(barcode))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Barcode non valido."
+            });
+        }
+
+        var result = await repository.GetAsync(
+            clientId,
+            barcode,
+            ct);
+
+        if (result is null)
+        {
+            return Results.NotFound(new
+            {
+                message = "Prezzo cliente non trovato."
+            });
+        }
+
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura prezzo cliente",
             detail: ex.Message,
             statusCode: 500);
     }
