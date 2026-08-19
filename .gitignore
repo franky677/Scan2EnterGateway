@@ -21,3 +21,22 @@ Thumbs.db
 PortableGit/
 # Publish output
 publish/
+
+# Accidental publish output in repository root
+/*.dll
+/*.exe
+/*.pdb
+/*.json
+/web.config
+/api/
+/de/
+/es/
+/fr/
+/it/
+/ja/
+/ko/
+/pt-BR/
+/ru/
+/runtimes/
+/zh-Hans/
+/zh-Hant/
