@@ -121,6 +121,7 @@ public sealed class ColloRepository
                 numeroCollo,
                 request.ClientId,
                 client.Value.PaymentId,
+                request.Note,
                 now,
                 cancellationToken);
 
@@ -158,6 +159,356 @@ public sealed class ColloRepository
             await transaction.RollbackAsync(CancellationToken.None);
             throw;
         }
+    }
+
+    public async Task<List<ColloHistorySummaryDto>> SearchHistoryAsync(
+        string? query,
+        int days = 30,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        days = Math.Max(days, 0);
+        var normalizedQuery = (query ?? string.Empty).Trim();
+
+        /*
+         * Strategia a due fasi.
+         *
+         * 1) Cerchiamo prima SOLO nelle testate:
+         *    numero collo, cliente, annotazioni.
+         *
+         * 2) Soltanto se non abbiamo ancora raggiunto @limit,
+         *    cerchiamo anche dentro righe/barcode/articoli.
+         *
+         * In questo modo una ricerca come "luciano" che corrisponde al nome
+         * cliente non costringe SQL Server a scandire tabDettaglioColli.
+         */
+        const string sql = """
+            CREATE TABLE #Candidates
+            (
+                idTestata INT NOT NULL PRIMARY KEY,
+                SortDate DATETIME NULL
+            );
+
+            INSERT INTO #Candidates (idTestata, SortDate)
+            SELECT TOP (@limit)
+                t.idTestata,
+                ISNULL(t.dataAgg, t.DataCreaz)
+            FROM dbo.tabTestateColli AS t
+            LEFT JOIN dbo.tabClienti AS c
+                ON c.IdCliente = t.IdCliente
+            WHERE t.TipoDocumentoPrenotato = 25
+              AND (
+                    @days = 0
+                    OR t.DataCreaz >= DATEADD(DAY, -@days, CAST(GETDATE() AS date))
+              )
+              AND (
+                    @query = ''
+                    OR LTRIM(RTRIM(ISNULL(t.NumeroCollo, ''))) LIKE '%' + @query + '%'
+                    OR ISNULL(c.RagioneSociale1, '') LIKE '%' + @query + '%'
+                    OR ISNULL(c.RagioneSociale2, '') LIKE '%' + @query + '%'
+                    OR ISNULL(t.Annotazioni, '') LIKE '%' + @query + '%'
+              )
+            ORDER BY
+                ISNULL(t.dataAgg, t.DataCreaz) DESC,
+                t.idTestata DESC;
+
+            IF @query <> ''
+               AND NOT EXISTS (SELECT 1 FROM #Candidates)
+            BEGIN
+                /*
+                 * Fallback articoli: niente OR tra campi diversi.
+                 * I tre rami sono separati e uniti con UNION, perché i test
+                 * diretti su SQL Server risultano veloci singolarmente.
+                 */
+
+                INSERT INTO #Candidates (idTestata, SortDate)
+                SELECT TOP (@limit)
+                    q.IdTestata,
+                    MAX(q.SortDate) AS SortDate
+                FROM
+                (
+                    /* Descrizione riga */
+                    SELECT
+                        dx.IdTestata,
+                        ISNULL(tx.dataAgg, tx.DataCreaz) AS SortDate
+                    FROM dbo.tabDettaglioColli AS dx
+                    INNER JOIN dbo.tabTestateColli AS tx
+                        ON tx.idTestata = dx.IdTestata
+                    WHERE tx.TipoDocumentoPrenotato = 25
+                      AND (
+                            @days = 0
+                            OR tx.DataCreaz >= DATEADD(
+                                DAY,
+                                -@days,
+                                CAST(GETDATE() AS date)
+                            )
+                      )
+                      AND ISNULL(dx.Descrizione, '') LIKE '%' + @query + '%'
+
+                    UNION
+
+                    /* Barcode riga */
+                    SELECT
+                        dx.IdTestata,
+                        ISNULL(tx.dataAgg, tx.DataCreaz) AS SortDate
+                    FROM dbo.tabDettaglioColli AS dx
+                    INNER JOIN dbo.tabTestateColli AS tx
+                        ON tx.idTestata = dx.IdTestata
+                    WHERE tx.TipoDocumentoPrenotato = 25
+                      AND (
+                            @days = 0
+                            OR tx.DataCreaz >= DATEADD(
+                                DAY,
+                                -@days,
+                                CAST(GETDATE() AS date)
+                            )
+                      )
+                      AND ISNULL(dx.BarCode, '') LIKE '%' + @query + '%'
+
+                    UNION
+
+                    /* Codice articolo */
+                    SELECT
+                        dx.IdTestata,
+                        ISNULL(tx.dataAgg, tx.DataCreaz) AS SortDate
+                    FROM dbo.tabDettaglioColli AS dx
+                    INNER JOIN dbo.tabTestateColli AS tx
+                        ON tx.idTestata = dx.IdTestata
+                    INNER JOIN dbo.tabBarcode AS bx
+                        ON bx.Barcode = dx.BarCode
+                    INNER JOIN dbo.tabArticoli AS ax
+                        ON ax.idArticolo = bx.idArticolo
+                    WHERE tx.TipoDocumentoPrenotato = 25
+                      AND (
+                            @days = 0
+                            OR tx.DataCreaz >= DATEADD(
+                                DAY,
+                                -@days,
+                                CAST(GETDATE() AS date)
+                            )
+                      )
+                      AND ISNULL(ax.CodiceArticolo, '') LIKE '%' + @query + '%'
+                ) AS q
+                GROUP BY q.IdTestata
+                ORDER BY
+                    MAX(q.SortDate) DESC,
+                    q.IdTestata DESC;
+            END;
+
+            SELECT
+                t.idTestata,
+                LTRIM(RTRIM(ISNULL(t.NumeroCollo, ''))) AS NumeroCollo,
+                ISNULL(t.IdCliente, 0) AS IdCliente,
+                LTRIM(RTRIM(
+                    ISNULL(c.RagioneSociale1, '') + ' ' +
+                    ISNULL(c.RagioneSociale2, '')
+                )) AS Cliente,
+                ISNULL(t.dataAgg, t.DataCreaz) AS CreatedAt,
+                ISNULL(t.IsElaborato, 0) AS IsElaborato,
+                CASE
+                    WHEN NULLIF(
+                        LTRIM(RTRIM(ISNULL(t.Annotazioni, ''))),
+                        ''
+                    ) IS NULL
+                        THEN CAST(0 AS bit)
+                    ELSE CAST(1 AS bit)
+                END AS HasNote,
+                ISNULL(a.ItemCount, 0) AS ItemCount,
+                ISNULL(a.PieceCount, 0) AS PieceCount,
+                ISNULL(a.Totale, 0) AS Totale
+            FROM #Candidates AS h
+            INNER JOIN dbo.tabTestateColli AS t
+                ON t.idTestata = h.idTestata
+            LEFT JOIN dbo.tabClienti AS c
+                ON c.IdCliente = t.IdCliente
+            OUTER APPLY
+            (
+                SELECT
+                    COUNT(d.idDettaglio) AS ItemCount,
+                    ISNULL(
+                        SUM(ISNULL(d.Quantita, 0)),
+                        0
+                    ) AS PieceCount,
+                    ISNULL(
+                        SUM(
+                            CASE
+                                WHEN ISNULL(d.TotaleNettoSconto, 0) <> 0
+                                    THEN d.TotaleNettoSconto
+                                ELSE ISNULL(d.Totale, 0)
+                            END
+                        ),
+                        0
+                    ) AS Totale
+                FROM dbo.tabDettaglioColli AS d
+                WHERE d.IdTestata = h.idTestata
+            ) AS a
+            ORDER BY
+                h.SortDate DESC,
+                h.idTestata DESC;
+
+            DROP TABLE #Candidates;
+            """;
+
+        var results = new List<ColloHistorySummaryDto>();
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new SqlCommand(sql, connection);
+
+        /*
+         * Manteniamo 30 secondi: se questa versione va ancora in timeout
+         * significa che il collo di bottiglia è nel ramo dettaglio, non
+         * nella ricerca cliente/testata.
+         */
+        command.CommandTimeout = 30;
+
+        command.Parameters.Add("@limit", SqlDbType.Int).Value = limit;
+        command.Parameters.Add("@days", SqlDbType.Int).Value = days;
+        command.Parameters.Add("@query", SqlDbType.NVarChar, 200).Value =
+            normalizedQuery;
+
+        await using var reader =
+            await command.ExecuteReaderAsync(cancellationToken);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var numeroCollo =
+                reader["NumeroCollo"]?.ToString()?.Trim() ?? "";
+
+            var numeroInt =
+                int.TryParse(
+                    numeroCollo,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var parsedNumero)
+                    ? parsedNumero
+                    : 0;
+
+            results.Add(new ColloHistorySummaryDto
+            {
+                TestataId =
+                    Convert.ToInt32(reader["idTestata"]),
+
+                NumeroCollo =
+                    numeroCollo,
+
+                BarcodeCollo =
+                    numeroInt > 0
+                        ? BuildColloEan13(numeroInt)
+                        : "",
+
+                ClientId =
+                    Convert.ToInt32(reader["IdCliente"]),
+
+                ClientName =
+                    reader["Cliente"]?.ToString()?.Trim() ?? "",
+
+                CreatedAt =
+                    reader["CreatedAt"] is DateTime createdAt
+                        ? createdAt
+                        : DateTime.MinValue,
+
+                ItemCount =
+                    Convert.ToInt32(reader["ItemCount"]),
+
+                PieceCount =
+                    Convert.ToDecimal(
+                        reader["PieceCount"],
+                        CultureInfo.InvariantCulture),
+
+                Total =
+                    Convert.ToDecimal(
+                        reader["Totale"],
+                        CultureInfo.InvariantCulture),
+
+                IsElaborato =
+                    Convert.ToBoolean(reader["IsElaborato"]),
+
+                HasNote =
+                    Convert.ToBoolean(reader["HasNote"])
+            });
+        }
+
+        return results;
+    }
+
+
+    public async Task<ColloHistoryDetailDto?> GetHistoryDetailAsync(
+        int testataId,
+        CancellationToken cancellationToken = default)
+    {
+        const string headerSql = """
+            SELECT TOP (1)
+                t.idTestata,
+                LTRIM(RTRIM(ISNULL(t.NumeroCollo, ''))) AS NumeroCollo,
+                ISNULL(t.IdCliente, 0) AS IdCliente,
+                LTRIM(RTRIM(ISNULL(c.RagioneSociale1, '') + ' ' + ISNULL(c.RagioneSociale2, ''))) AS Cliente,
+                ISNULL(t.dataAgg, t.DataCreaz) AS CreatedAt,
+                ISNULL(t.IsElaborato, 0) AS IsElaborato,
+                LTRIM(RTRIM(ISNULL(t.Annotazioni, ''))) AS Annotazioni
+            FROM dbo.tabTestateColli AS t
+            LEFT JOIN dbo.tabClienti AS c ON c.IdCliente = t.IdCliente
+            WHERE t.idTestata = @testataId AND t.TipoDocumentoPrenotato = 25;
+            """;
+
+        const string detailSql = """
+            SELECT
+                ISNULL(a.idArticolo, 0) AS idArticolo,
+                ISNULL(a.CodiceArticolo, '') AS CodiceArticolo,
+                LTRIM(RTRIM(ISNULL(d.Descrizione, ''))) AS Descrizione,
+                LTRIM(RTRIM(ISNULL(d.BarCode, ''))) AS Barcode,
+                ISNULL(d.Quantita, 0) AS Quantita,
+                ISNULL(d.Prezzo, 0) AS Prezzo,
+                CASE WHEN ISNULL(d.TotaleNettoSconto, 0) <> 0 THEN d.TotaleNettoSconto ELSE ISNULL(d.Totale, 0) END AS Totale
+            FROM dbo.tabDettaglioColli AS d
+            LEFT JOIN dbo.tabBarcode AS b ON LTRIM(RTRIM(b.Barcode)) = LTRIM(RTRIM(d.BarCode))
+            LEFT JOIN dbo.tabArticoli AS a ON a.idArticolo = b.idArticolo
+            WHERE d.IdTestata = @testataId
+            ORDER BY d.idDettaglio;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        ColloHistoryDetailDto? result;
+        await using (var header = new SqlCommand(headerSql, connection))
+        {
+            header.Parameters.Add("@testataId", SqlDbType.Int).Value = testataId;
+            await using var reader = await header.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken)) return null;
+            var numeroCollo = reader["NumeroCollo"]?.ToString()?.Trim() ?? "";
+            var numeroInt = int.TryParse(numeroCollo, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedNumero) ? parsedNumero : 0;
+            result = new ColloHistoryDetailDto
+            {
+                TestataId = Convert.ToInt32(reader["idTestata"]),
+                NumeroCollo = numeroCollo,
+                BarcodeCollo = numeroInt > 0 ? BuildColloEan13(numeroInt) : "",
+                ClientId = Convert.ToInt32(reader["IdCliente"]),
+                ClientName = reader["Cliente"]?.ToString()?.Trim() ?? "",
+                CreatedAt = reader["CreatedAt"] is DateTime createdAt ? createdAt : DateTime.MinValue,
+                IsElaborato = Convert.ToBoolean(reader["IsElaborato"]),
+                Note = reader["Annotazioni"]?.ToString()?.Trim() ?? ""
+            };
+        }
+        await using (var details = new SqlCommand(detailSql, connection))
+        {
+            details.Parameters.Add("@testataId", SqlDbType.Int).Value = testataId;
+            await using var reader = await details.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Items.Add(new ColloHistoryItemDto
+                {
+                    ArticleId = Convert.ToInt64(reader["idArticolo"]),
+                    ArticleCode = reader["CodiceArticolo"]?.ToString()?.Trim() ?? "",
+                    Description = reader["Descrizione"]?.ToString()?.Trim() ?? "",
+                    Barcode = reader["Barcode"]?.ToString()?.Trim() ?? "",
+                    Quantity = Convert.ToDecimal(reader["Quantita"], CultureInfo.InvariantCulture),
+                    Price = Convert.ToDecimal(reader["Prezzo"], CultureInfo.InvariantCulture),
+                    Total = Convert.ToDecimal(reader["Totale"], CultureInfo.InvariantCulture)
+                });
+            }
+        }
+        result.Total = result.Items.Sum(x => x.Total);
+        return result;
     }
 
     private static async Task<(string Name, int PaymentId)?> ReadClientAsync(
@@ -294,6 +645,7 @@ public sealed class ColloRepository
         int numeroCollo,
         int clientId,
         int paymentId,
+        string? note,
         DateTime now,
         CancellationToken cancellationToken)
     {
@@ -311,6 +663,7 @@ public sealed class ColloRepository
                 OraScontrino,
                 dataAgg,
                 UtenteUltimoAccesso,
+                Annotazioni,
                 NumeroDocumento,
                 DataDocumento,
                 DDTForn_DataRiferimento,
@@ -346,6 +699,7 @@ public sealed class ColloRepository
                 @zeroDate,
                 @dataAgg,
                 N'Scan2Enter',
+                @annotazioni,
                 0,
                 @dataCreaz,
                 @zeroDate,
@@ -386,6 +740,10 @@ public sealed class ColloRepository
                 now.Millisecond);
 
         command.Parameters.Add("@dataAgg", SqlDbType.DateTime).Value = now;
+        command.Parameters.Add("@annotazioni", SqlDbType.NVarChar, 4000)
+            .Value = string.IsNullOrWhiteSpace(note)
+                ? DBNull.Value
+                : note.Trim();
         command.Parameters.Add("@zeroDate", SqlDbType.DateTime)
             .Value = new DateTime(1899, 12, 30);
         command.Parameters.Add("@idPagamento", SqlDbType.Int).Value = paymentId;

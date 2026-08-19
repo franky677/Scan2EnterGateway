@@ -23,7 +23,9 @@ builder.Services.AddSingleton<LocationRepository>();
 builder.Services.AddSingleton<ProductImageRepository>();
 builder.Services.AddSingleton<SessionRepository>();
 builder.Services.AddSingleton<ClientPriceRepository>();
+builder.Services.AddSingleton<CustomerRepository>();
 builder.Services.AddSingleton<ColloRepository>();
+builder.Services.AddSingleton<FavoriteRepository>();
 builder.Services.AddSingleton<LabelBitmapRenderer>();
 builder.Services.AddSingleton<WindowsLabelPrinter>();
 builder.Services.AddSingleton<GodexLabelPrinter>();
@@ -96,9 +98,15 @@ app.MapGet("/", () => Results.Ok(new
         "/api/product/{barcode}",
         "/api/search",
         "/api/session/history",
+        "/api/session/customers",
         "/api/session/client-price",
         "POST /api/session/colli",
+        "/api/session/colli?days=30&q=",
+        "/api/session/colli/{testataId}",
         "/api/product/{barcode}/image",
+        "/api/favorites",
+        "POST /api/favorites",
+        "DELETE /api/favorites/{articleId}",
         "PUT /api/product/{articleId}/stock",
         "/api/locations",
         "/api/product/{articleId}/locations",
@@ -351,6 +359,34 @@ app.MapGet("/api/session/history", async (
 });
 
 
+app.MapGet("/api/session/customers", async (
+    string? q,
+    CustomerRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var customers = await repository.SearchAsync(
+            q ?? "",
+            ct);
+
+        return Results.Ok(new
+        {
+            query = (q ?? "").Trim(),
+            count = customers.Count,
+            items = customers
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore ricerca clienti Sessione",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
 app.MapGet("/api/session/client-price", async (
     int clientId,
     string barcode,
@@ -400,6 +436,45 @@ app.MapGet("/api/session/client-price", async (
 });
 
 
+app.MapGet("/api/session/colli", async (
+    int? days,
+    int? limit,
+    string? q,
+    ColloRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var results = await repository.SearchHistoryAsync(q, days ?? 30, limit ?? 100, ct);
+        return Results.Ok(new { days = days ?? 30, query = (q ?? string.Empty).Trim(), count = results.Count, items = results });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(title: "Errore storico colli", detail: ex.Message, statusCode: 500);
+    }
+});
+
+app.MapGet("/api/session/colli/{testataId:int}", async (
+    int testataId,
+    ColloRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var result = await repository.GetHistoryDetailAsync(testataId, ct);
+        if (result is null)
+        {
+            return Results.NotFound(new { message = "Collo non trovato." });
+        }
+
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(title: "Errore dettaglio collo", detail: ex.Message, statusCode: 500);
+    }
+});
+
 app.MapPost("/api/session/colli", async (
     CreateColloRequest request,
     ColloRepository repository,
@@ -413,6 +488,15 @@ app.MapPost("/api/session/colli", async (
             {
                 created = false,
                 message = "Selezionare un cliente."
+            });
+        }
+
+        if ((request.Note?.Length ?? 0) > 4000)
+        {
+            return Results.BadRequest(new
+            {
+                created = false,
+                message = "La nota collo supera 4000 caratteri."
             });
         }
 
@@ -457,6 +541,99 @@ app.MapPost("/api/session/colli", async (
     {
         return Results.Problem(
             title: "Errore creazione collo Sessione",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+
+app.MapGet("/api/favorites", async (
+    FavoriteRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetAllAsync(ct);
+
+        return Results.Ok(new
+        {
+            count = items.Count,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura Preferiti Scan2Enter",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPost("/api/favorites", async (
+    FavoriteUpsertRequest request,
+    FavoriteRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (request.ArticleId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                saved = false,
+                message = "Id articolo non valido."
+            });
+        }
+
+        var saved = await repository.UpsertAsync(request, ct);
+
+        return Results.Ok(new
+        {
+            saved,
+            articleId = request.ArticleId
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore salvataggio Preferito Scan2Enter",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapDelete("/api/favorites/{articleId:long}", async (
+    long articleId,
+    FavoriteRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                removed = false,
+                message = "Id articolo non valido."
+            });
+        }
+
+        var removed = await repository.RemoveAsync(articleId, ct);
+
+        return Results.Ok(new
+        {
+            removed,
+            articleId
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore rimozione Preferito Scan2Enter",
             detail: ex.Message,
             statusCode: 500);
     }

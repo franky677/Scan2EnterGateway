@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace Scan2EnterGateway;
 
@@ -104,22 +105,54 @@ public sealed class LabelBitmapRenderer
         var barcode = LabelGenerator.NormalizeBarcode(
             request.Barcode);
 
-        DrawFittedText(
-            graphics,
-            code,
-            new RectangleF(7, 0, 306, 28),
-            maxSize: 24.0f,
-            minSize: 18.0f,
-            bold: true);
+        var isColloLabel = IsColloDateTime(description);
 
-        DrawFittedText(
-            graphics,
-            description,
-            new RectangleF(7, 16, 306, 24),
-            maxSize: 13.0f,
-            minSize: 10.0f,
-            bold: false,
-            maxLines: 2);
+        if (isColloLabel)
+        {
+            /*
+             * Etichetta collo 40x13:
+             * - cliente a sinistra, nella posizione già usata
+             * - data/ora sulla stessa riga, sempre allineata a destra
+             * - data/ora +1 punto rispetto al vecchio testo descrizione (13 -> 14)
+             */
+            DrawFittedText(
+                graphics,
+                code,
+                new RectangleF(7, 0, 185, 28),
+                maxSize: 24.0f,
+                minSize: 18.0f,
+                bold: true);
+
+       DrawFittedText(
+    graphics,
+    description,
+    new RectangleF(148, 0, 165, 28),
+    maxSize: 18.0f,
+    minSize: 15.0f,
+    bold: false,
+    alignRight: true,
+    centeredVertically: true
+);
+        }
+        else
+        {
+            DrawFittedText(
+                graphics,
+                code,
+                new RectangleF(7, 0, 306, 28),
+                maxSize: 24.0f,
+                minSize: 18.0f,
+                bold: true);
+
+            DrawFittedText(
+                graphics,
+                description,
+                new RectangleF(7, 16, 306, 24),
+                maxSize: 13.0f,
+                minSize: 10.0f,
+                bold: false,
+                maxLines: 2);
+        }
 
         var barcodeTop = showPrice ? 31 : 32;
         var barcodeHeight = showPrice ? 37 : 42;
@@ -358,6 +391,13 @@ public sealed class LabelBitmapRenderer
         }
 
         return true;
+    }
+
+    private static bool IsColloDateTime(string value)
+    {
+        return Regex.IsMatch(
+            value ?? string.Empty,
+            @"^\d{2}/\d{2}/\d{2}\s+\d{2}:\d{2}$");
     }
 
     private static void DrawEan13(
