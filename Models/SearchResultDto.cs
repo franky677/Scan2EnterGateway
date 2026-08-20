@@ -16,5 +16,7 @@ public sealed class SearchResultDto
 
     public bool Moved { get; set; }
 
+    public bool Active { get; set; }
+
     public DateTime? LastMovement { get; set; }
 }

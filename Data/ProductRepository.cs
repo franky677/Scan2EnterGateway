@@ -186,6 +186,7 @@ public sealed class ProductRepository
                 a.CodiceArticolo,
                 a.Descrizione,
                 barcode.Barcode,
+                a.Attivo,
                 a.Movimentato,
                 a.dataUltimoMovimento,
                 g.Giacenza,
@@ -258,6 +259,9 @@ public sealed class ProductRepository
         await using var reader =
             await command.ExecuteReaderAsync(cancellationToken);
 
+        var activeOrdinal =
+            reader.GetOrdinal("Attivo");
+
         var movedOrdinal =
             reader.GetOrdinal("Movimentato");
 
@@ -274,6 +278,9 @@ public sealed class ProductRepository
                 Barcode = GetString(reader, "Barcode"),
                 Price = GetNumberAsString(reader, "PrezzoVendita"),
                 Stock = GetNumberAsString(reader, "Giacenza"),
+                Active =
+                    !reader.IsDBNull(activeOrdinal) &&
+                    reader.GetBoolean(activeOrdinal),
                 Moved =
                     !reader.IsDBNull(movedOrdinal) &&
                     reader.GetBoolean(movedOrdinal),
