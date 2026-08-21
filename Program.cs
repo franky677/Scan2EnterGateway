@@ -96,6 +96,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/health/database",
         "/api/reorder-list",
         "/api/product/{barcode}",
+        "/api/product/{articleId}/price-lists",
         "/api/search",
         "/api/session/history",
         "/api/session/customers",
@@ -108,6 +109,7 @@ app.MapGet("/", () => Results.Ok(new
         "POST /api/favorites",
         "DELETE /api/favorites/{articleId}",
         "PUT /api/product/{articleId}/stock",
+        "PUT /api/product/{articleId}/active",
         "/api/locations",
         "/api/product/{articleId}/locations",
         "POST /api/product/{articleId}/locations/{locationId}",
@@ -275,6 +277,32 @@ app.MapGet("/api/product/{barcode}", async (
     {
         return Results.Problem(
             title: "Unable to read product",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/product/{articleId:long}/price-lists", async (
+    long articleId,
+    ProductRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+            return Results.BadRequest(new { message = "Id articolo non valido." });
+
+        var items = await repository.GetPriceListsAsync(articleId, ct);
+        if (items.Count == 0)
+            return Results.NotFound(new { articleId, message = "Nessun listino vendita trovato." });
+
+        return Results.Ok(new { articleId, count = items.Count, items });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura listini vendita",
             detail: ex.Message,
             statusCode: 500);
     }
@@ -634,6 +662,58 @@ app.MapDelete("/api/favorites/{articleId:long}", async (
     {
         return Results.Problem(
             title: "Errore rimozione Preferito Scan2Enter",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPut("/api/product/{articleId:long}/active", async (
+    long articleId,
+    ProductActiveRequest request,
+    ProductRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                updated = false,
+                message = "Id articolo non valido."
+            });
+        }
+
+        var updated = await repository.UpdateActiveAsync(
+            articleId,
+            request.Active,
+            ct);
+
+        if (!updated)
+        {
+            return Results.NotFound(new
+            {
+                updated = false,
+                articleId,
+                message = "Articolo non trovato."
+            });
+        }
+
+        return Results.Ok(new
+        {
+            updated = true,
+            articleId,
+            active = request.Active,
+            message = request.Active
+                ? "Articolo sbloccato."
+                : "Articolo bloccato."
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Unable to update product active state",
             detail: ex.Message,
             statusCode: 500);
     }
@@ -1189,6 +1269,9 @@ app.MapPost("/api/labels/print", async (
 });
 
 app.Run();
+
+sealed record ProductActiveRequest(
+    bool Active);
 
 sealed record StockSettingsRequest(
     int WarehouseId = 0,

@@ -10,6 +10,8 @@ public class ProductInfoDto
 
     public string Barcode { get; set; } = "";
 
+    public bool Active { get; set; } = true;
+
     public string TaxablePrice { get; set; } = "";
 
     public string VatRate { get; set; } = "";
