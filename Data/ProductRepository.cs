@@ -203,6 +203,97 @@ public sealed class ProductRepository
     }
 
 
+    public async Task<bool> UpdatePriceListPriceAsync(
+        long articleId,
+        int priceListId,
+        decimal salePrice,
+        CancellationToken cancellationToken = default)
+    {
+        if (articleId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(articleId),
+                "Id articolo non valido.");
+        }
+
+        if (priceListId is not (1 or 2 or 3 or 4 or 6))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(priceListId),
+                "Listino vendita non valido.");
+        }
+
+        if (salePrice < 0m)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(salePrice),
+                "Il prezzo non può essere negativo.");
+        }
+
+        const string sql = """
+            UPDATE pv
+            SET
+                pv.PrezzoVendita = @salePrice,
+                pv.Imponibile =
+                    ROUND(
+                        @salePrice /
+                        (
+                            1.0 +
+                            (
+                                ISNULL(a.AliquotaIva, 0.0) / 100.0
+                            )
+                        ),
+                        4
+                    ),
+                pv.PrezzoImposto = 0,
+                pv.PrezzoBloccato = NULL,
+                pv.Locked = NULL,
+                pv.DataAgg = GETDATE(),
+                pv.UtenteUltimoAccesso = N'Franco'
+            FROM dbo.tabPrezziVendita AS pv
+            INNER JOIN dbo.tabArticoli AS a
+                ON a.idArticolo = pv.IdArticolo
+            WHERE pv.IdArticolo = @articleId
+              AND pv.IdListino = @priceListId
+              AND ISNULL(pv.idVariante1, -1) = -1
+              AND ISNULL(pv.idVariante2, -1) = -1
+              AND ISNULL(pv.idVariante3, -1) = -1;
+            """;
+
+        await using var connection =
+            new SqlConnection(_connectionString);
+
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command =
+            new SqlCommand(sql, connection);
+
+        command.Parameters.AddWithValue(
+            "@articleId",
+            articleId);
+
+        command.Parameters.AddWithValue(
+            "@priceListId",
+            priceListId);
+
+        var priceParameter =
+            command.Parameters.Add(
+                "@salePrice",
+                System.Data.SqlDbType.Decimal);
+
+        priceParameter.Precision = 18;
+        priceParameter.Scale = 2;
+        priceParameter.Value = salePrice;
+
+        command.CommandTimeout = 30;
+
+        var affectedRows =
+            await command.ExecuteNonQueryAsync(cancellationToken);
+
+        return affectedRows > 0;
+    }
+
+
     public async Task<bool> UpdateActiveAsync(
         long articleId,
         bool active,
@@ -469,3 +560,4 @@ public sealed class ProductRepository
             CultureInfo.InvariantCulture);
     }
 }
+

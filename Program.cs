@@ -97,6 +97,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/reorder-list",
         "/api/product/{barcode}",
         "/api/product/{articleId}/price-lists",
+        "PUT /api/product/{articleId}/price-lists/{priceListId}",
         "/api/search",
         "/api/session/history",
         "/api/session/customers",
@@ -307,6 +308,89 @@ app.MapGet("/api/product/{articleId:long}/price-lists", async (
             statusCode: 500);
     }
 });
+
+
+app.MapPut(
+    "/api/product/{articleId:long}/price-lists/{priceListId:int}",
+    async (
+        long articleId,
+        int priceListId,
+        ProductPriceUpdateRequest request,
+        ProductRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (articleId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    updated = false,
+                    message = "Id articolo non valido."
+                });
+            }
+
+            if (priceListId is not (1 or 2 or 3 or 4 or 6))
+            {
+                return Results.BadRequest(new
+                {
+                    updated = false,
+                    message = "Listino vendita non valido."
+                });
+            }
+
+            if (request.Price < 0m)
+            {
+                return Results.BadRequest(new
+                {
+                    updated = false,
+                    message = "Il prezzo non può essere negativo."
+                });
+            }
+
+            var updated =
+                await repository.UpdatePriceListPriceAsync(
+                    articleId,
+                    priceListId,
+                    request.Price,
+                    ct);
+
+            if (!updated)
+            {
+                return Results.NotFound(new
+                {
+                    updated = false,
+                    articleId,
+                    priceListId,
+                    message = "Prezzo listino non trovato."
+                });
+            }
+
+            var priceLists =
+                await repository.GetPriceListsAsync(
+                    articleId,
+                    ct);
+
+            var updatedPrice =
+                priceLists.FirstOrDefault(
+                    x => x.PriceListId == priceListId);
+
+            return Results.Ok(new
+            {
+                updated = true,
+                articleId,
+                priceListId,
+                price = updatedPrice
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore modifica prezzo listino",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
 
 
 app.MapGet("/api/search", async (
@@ -1269,6 +1353,9 @@ app.MapPost("/api/labels/print", async (
 });
 
 app.Run();
+
+sealed record ProductPriceUpdateRequest(
+    decimal Price);
 
 sealed record ProductActiveRequest(
     bool Active);
