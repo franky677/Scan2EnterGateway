@@ -26,6 +26,7 @@ builder.Services.AddSingleton<ClientPriceRepository>();
 builder.Services.AddSingleton<CustomerRepository>();
 builder.Services.AddSingleton<ColloRepository>();
 builder.Services.AddSingleton<FavoriteRepository>();
+builder.Services.AddSingleton<SalesRepository>();
 builder.Services.AddSingleton<LabelBitmapRenderer>();
 builder.Services.AddSingleton<WindowsLabelPrinter>();
 builder.Services.AddSingleton<GodexLabelPrinter>();
@@ -106,6 +107,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/session/colli?days=30&q=",
         "/api/session/colli/{testataId}",
         "/api/product/{barcode}/image",
+        "/api/sales/summary?year=2026",
         "/api/favorites",
         "POST /api/favorites",
         "DELETE /api/favorites/{articleId}",
@@ -1233,6 +1235,40 @@ app.MapDelete(
                 statusCode: 500);
         }
     });
+
+
+app.MapGet("/api/sales/summary", async (
+    int? year,
+    SalesRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var selectedYear = year ?? DateTime.Today.Year;
+
+        if (selectedYear < 2023 || selectedYear > DateTime.Today.Year)
+        {
+            return Results.BadRequest(new
+            {
+                message = $"Anno non valido. Selezionare un anno tra 2023 e {DateTime.Today.Year}."
+            });
+        }
+
+        var summary = await repository.GetSummaryAsync(
+            selectedYear,
+            ct);
+
+        return Results.Ok(summary);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura riepilogo vendite",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 
 app.MapPost("/api/labels/print", async (
     LabelPrintRequest request,
