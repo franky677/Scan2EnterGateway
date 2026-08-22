@@ -14,6 +14,10 @@ public sealed record ReorderArticle
     public string SupplierName { get; init; } = "";
     public string SupplierArticleCode { get; init; } = "";
 
+    public decimal? PurchaseTaxable { get; init; }
+    public decimal? PurchasePrice { get; init; }
+    public decimal? VatRate { get; init; }
+
     public decimal? Stock { get; init; }
     public decimal? Ordered { get; init; }
     public decimal? Committed { get; init; }

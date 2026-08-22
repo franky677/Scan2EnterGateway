@@ -47,7 +47,10 @@ SELECT
     s.NonOrdinabileAFornitore,
     af.IdFornitore,
     af.CodiceArticoloFornitore,
-    f.Fornitore AS SupplierName
+    f.Fornitore AS SupplierName,
+    pa.Imponibile AS PurchaseTaxable,
+    pa.PrezzoAcquisto AS PurchasePrice,
+    pa.aIva AS VatRate
 FROM dbo.tabArticoli AS a
 INNER JOIN dbo.TabScortaArticoliView AS s
     ON s.idArticolo = a.idArticolo
@@ -59,6 +62,12 @@ LEFT JOIN dbo.TabArticoliFornitori AS af
    AND af.Predefinito = 1
 LEFT JOIN dbo.ListaFornitori AS f
     ON f.ID = af.IdFornitore
+LEFT JOIN dbo.TabPrezziAcquisto AS pa
+    ON pa.idFornitore = af.IdFornitore
+   AND pa.CodiceArticoloFornitore = af.CodiceArticoloFornitore
+   AND ISNULL(pa.idVariante1, -1) = -1
+   AND ISNULL(pa.idVariante2, -1) = -1
+   AND ISNULL(pa.idVariante3, -1) = -1
 OUTER APPLY
 (
     SELECT TOP (1) tb.Barcode
@@ -124,6 +133,9 @@ ORDER BY
                 SupplierName = Text(reader, "SupplierName") ?? "",
                 SupplierArticleCode =
                     Text(reader, "CodiceArticoloFornitore") ?? "",
+                PurchaseTaxable = Number(reader, "PurchaseTaxable"),
+                PurchasePrice = Number(reader, "PurchasePrice"),
+                VatRate = Number(reader, "VatRate"),
                 Stock = stock,
                 Ordered = Number(reader, "Ordinato"),
                 Committed = Number(reader, "Impegnato"),
