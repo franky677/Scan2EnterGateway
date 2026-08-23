@@ -110,6 +110,13 @@ app.MapGet("/", () => Results.Ok(new
         "/api/product/{barcode}/image",
         "/api/sales/summary?year=2026",
         "/api/inventory-analysis/summary",
+        "/api/inventory-analysis/suppliers",
+        "/api/inventory-analysis/manufacturers",
+        "/api/inventory-analysis/families",
+        "/api/inventory-analysis/subfamilies",
+        "/api/inventory-analysis/categories",
+        "/api/inventory-analysis/subcategories",
+        "/api/inventory-analysis/items",
         "/api/favorites",
         "POST /api/favorites",
         "DELETE /api/favorites/{articleId}",
@@ -1285,6 +1292,209 @@ app.MapGet("/api/inventory-analysis/summary", async (
     {
         return Results.Problem(
             title: "Errore lettura analisi magazzino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/inventory-analysis/suppliers", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetSupplierSummaryAsync(ct);
+
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino per fornitore",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+
+app.MapGet("/api/inventory-analysis/manufacturers", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetManufacturersAsync(ct);
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino per produttore",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/inventory-analysis/families", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetFamiliesAsync(ct);
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino per famiglia",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/inventory-analysis/subfamilies", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetSubFamiliesAsync(ct);
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino per sottofamiglia",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/inventory-analysis/categories", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetCategoriesAsync(ct);
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino per categoria",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/inventory-analysis/subcategories", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var items = await repository.GetSubCategoriesAsync(ct);
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino per sottocategoria",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+
+app.MapGet("/api/inventory-analysis/items", async (
+    int? rotationId,
+    int? supplierId,
+    int? manufacturerId,
+    int? familyId,
+    int? subFamilyId,
+    int? categoryId,
+    int? subCategoryId,
+    string? q,
+    int? limit,
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (rotationId is < 1 or > 6)
+        {
+            return Results.BadRequest(new
+            {
+                message = "rotationId deve essere compreso tra 1 e 6."
+            });
+        }
+
+        var filter = new InventoryAnalysisFilterDto
+        {
+            RotationId = rotationId,
+            SupplierId = supplierId,
+            ManufacturerId = manufacturerId,
+            FamilyId = familyId,
+            SubFamilyId = subFamilyId,
+            CategoryId = categoryId,
+            SubCategoryId = subCategoryId,
+            Q = q,
+            Limit = Math.Clamp(limit ?? 200, 1, 2000)
+        };
+
+        var items = await repository.GetItemsAsync(filter, ct);
+
+        return Results.Ok(new
+        {
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            filter,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura dettaglio analisi magazzino",
             detail: ex.Message,
             statusCode: 500);
     }

@@ -60,3 +60,40 @@ public sealed class InventoryAnalysisItemDto
     public decimal FifoValue { get; set; }
     public decimal PurchaseListValue { get; set; }
 }
+
+public sealed class InventorySupplierSummaryDto
+{
+    public int? SupplierId { get; set; }
+    public string Supplier { get; set; } = "";
+
+    public int Articles { get; set; }
+    public decimal Quantity { get; set; }
+
+    public decimal FifoValue { get; set; }
+    public decimal PurchaseListValue { get; set; }
+}
+
+public sealed class InventoryDimensionSummaryDto
+{
+    public int? Id { get; set; }
+    public string Name { get; set; } = "";
+
+    public int Articles { get; set; }
+    public decimal Quantity { get; set; }
+
+    public decimal FifoValue { get; set; }
+    public decimal PurchaseListValue { get; set; }
+}
+
+public sealed class InventoryAnalysisFilterDto
+{
+    public int? RotationId { get; set; }
+    public int? SupplierId { get; set; }
+    public int? ManufacturerId { get; set; }
+    public int? FamilyId { get; set; }
+    public int? SubFamilyId { get; set; }
+    public int? CategoryId { get; set; }
+    public int? SubCategoryId { get; set; }
+    public string? Q { get; set; }
+    public int Limit { get; set; } = 200;
+}
