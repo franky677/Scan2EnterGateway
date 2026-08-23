@@ -27,6 +27,7 @@ builder.Services.AddSingleton<CustomerRepository>();
 builder.Services.AddSingleton<ColloRepository>();
 builder.Services.AddSingleton<FavoriteRepository>();
 builder.Services.AddSingleton<SalesRepository>();
+builder.Services.AddSingleton<InventoryAnalysisRepository>();
 builder.Services.AddSingleton<LabelBitmapRenderer>();
 builder.Services.AddSingleton<WindowsLabelPrinter>();
 builder.Services.AddSingleton<GodexLabelPrinter>();
@@ -108,6 +109,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/session/colli/{testataId}",
         "/api/product/{barcode}/image",
         "/api/sales/summary?year=2026",
+        "/api/inventory-analysis/summary",
         "/api/favorites",
         "POST /api/favorites",
         "DELETE /api/favorites/{articleId}",
@@ -1264,6 +1266,25 @@ app.MapGet("/api/sales/summary", async (
     {
         return Results.Problem(
             title: "Errore lettura riepilogo vendite",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/inventory-analysis/summary", async (
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var summary = await repository.GetSummaryAsync(ct);
+        return Results.Ok(summary);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura analisi magazzino",
             detail: ex.Message,
             statusCode: 500);
     }
