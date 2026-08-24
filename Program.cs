@@ -118,6 +118,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/inventory-analysis/subcategories",
         "/api/inventory-analysis/items",
         "/api/inventory-analysis/classifications",
+        "POST /api/inventory-analysis/report",
         "/api/favorites",
         "POST /api/favorites",
         "DELETE /api/favorites/{articleId}",
@@ -1479,7 +1480,7 @@ app.MapGet("/api/inventory-analysis/items", async (
             CategoryId = categoryId,
             SubCategoryId = subCategoryId,
             Q = q,
-            Limit = Math.Clamp(limit ?? 200, 1, 2000)
+            Limit = Math.Clamp(limit ?? 200, 1, 50000)
         };
 
         var items = await repository.GetItemsAsync(filter, ct);
@@ -1501,6 +1502,195 @@ app.MapGet("/api/inventory-analysis/items", async (
     }
 });
 
+
+
+app.MapPost("/api/inventory-analysis/report", async (
+    InventoryAnalysisReportRequest request,
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var valuation = (request.Valuation ?? "fifo").Trim().ToLowerInvariant();
+        if (valuation is not ("fifo" or "purchase"))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Valorizzazione non valida. Usare 'fifo' oppure 'purchase'."
+            });
+        }
+
+        var items = await repository.GetReportItemsAsync(request, ct);
+
+        static string H(string? value) =>
+            System.Net.WebUtility.HtmlEncode(value ?? "");
+
+        static string N(decimal value) =>
+            value.ToString("N2", System.Globalization.CultureInfo.GetCultureInfo("it-IT"));
+
+        static string Q(decimal value) =>
+            value.ToString("N3", System.Globalization.CultureInfo.GetCultureInfo("it-IT"));
+
+        var title = string.IsNullOrWhiteSpace(request.Title)
+            ? "ANALISI MAGAZZINO"
+            : request.Title.Trim();
+
+        var valuationTitle = valuation == "fifo"
+            ? "FIFO"
+            : "LISTINO ACQUISTO";
+
+        var totalQuantity = items.Sum(x => x.Quantity);
+        var totalValue = items.Sum(x =>
+            valuation == "fifo" ? x.FifoValue : x.PurchaseListValue);
+
+        const int rowsPerPage = 46;
+
+        var pageCount = Math.Max(
+            1,
+            (int)Math.Ceiling(items.Count / (double)rowsPerPage));
+
+        var pageHtml = new System.Text.StringBuilder();
+
+        for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
+        {
+            var pageItems = items
+                .Skip(pageIndex * rowsPerPage)
+                .Take(rowsPerPage)
+                .ToList();
+
+            var rows = string.Join(
+                Environment.NewLine,
+                pageItems.Select(x =>
+                {
+                    var value = valuation == "fifo"
+                        ? x.FifoValue
+                        : x.PurchaseListValue;
+
+                    return $"""
+<tr>
+  <td>{H(x.ArticleCode)}</td>
+  <td>{H(x.Description)}</td>
+  <td class="num">{Q(x.Quantity)}</td>
+  <td class="num">{N(value)} €</td>
+</tr>
+""";
+                }));
+
+            pageHtml.Append(
+                $$"""
+<section class="report-page">
+  <div class="page-header">
+    <h1>{{H(title)}} — {{valuationTitle}}</h1>
+    <div class="meta">
+      {{items.Count}} articoli · Quantità {{Q(totalQuantity)}} · Totale {{N(totalValue)}} € ·
+      Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Codice</th>
+        <th>Descrizione</th>
+        <th class="num">Q.tà</th>
+        <th class="num">{{valuationTitle}}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{rows}}
+    </tbody>
+  </table>
+
+  <div class="page-footer">
+    Pag. {{pageIndex + 1}} di {{pageCount}}
+  </div>
+</section>
+""");
+        }
+
+        var html = $$"""
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>{{H(title)}} - {{valuationTitle}}</title>
+<style>
+@page { size: A4 portrait; margin: 7mm 8mm 8mm 8mm; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 8.5pt; }
+
+.report-page {
+  min-height: 279mm;
+  position: relative;
+  page-break-after: always;
+  break-after: page;
+  padding-bottom: 8mm;
+}
+.report-page:last-child {
+  page-break-after: auto;
+  break-after: auto;
+}
+
+.page-header { margin-bottom: 2mm; }
+h1 { font-size: 13pt; margin: 0 0 1.5mm 0; }
+.meta { font-size: 8pt; margin-bottom: 2mm; }
+
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+thead { display: table-header-group; }
+th {
+  text-align: left;
+  border-bottom: 1.1px solid #000;
+  padding: .8mm .8mm;
+  font-size: 7.8pt;
+}
+td {
+  border-bottom: .3px solid #bbb;
+  padding: .65mm .8mm;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+}
+th:nth-child(1), td:nth-child(1) { width: 24%; }
+th:nth-child(2), td:nth-child(2) { width: 52%; }
+th:nth-child(3), td:nth-child(3) { width: 10%; }
+th:nth-child(4), td:nth-child(4) { width: 14%; }
+
+.num { text-align: right; white-space: nowrap; }
+
+.page-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  text-align: center;
+  font-size: 8pt;
+  font-weight: bold;
+  border-top: .4px solid #aaa;
+  padding-top: 1.5mm;
+}
+
+@media print {
+  .report-page { page-break-inside: avoid; break-inside: avoid-page; }
+}
+</style>
+</head>
+<body>
+{{pageHtml}}
+</body>
+</html>
+""";
+
+        return Results.Text(html, "text/html; charset=utf-8");
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore generazione report Analisi Magazzino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
 
 
 app.MapGet("/api/inventory-analysis/classifications", async (

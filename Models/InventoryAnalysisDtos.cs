@@ -97,3 +97,28 @@ public sealed class InventoryAnalysisFilterDto
     public string? Q { get; set; }
     public int Limit { get; set; } = 200;
 }
+
+
+public sealed class InventoryAnalysisReportRequest
+{
+    public string Valuation { get; set; } = "fifo";
+    public string? Title { get; set; }
+
+    public int? RotationId { get; set; }
+    public int? SupplierId { get; set; }
+    public int? ManufacturerId { get; set; }
+    public int? FamilyId { get; set; }
+    public int? SubFamilyId { get; set; }
+    public int? CategoryId { get; set; }
+    public int? SubCategoryId { get; set; }
+    public string? Q { get; set; }
+}
+
+public sealed class InventoryAnalysisReportDto
+{
+    public string FileName { get; set; } = "";
+    public string FullPath { get; set; } = "";
+    public int Articles { get; set; }
+    public decimal Quantity { get; set; }
+    public decimal TotalValue { get; set; }
+}

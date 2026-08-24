@@ -901,7 +901,7 @@ ORDER BY ValoreFIFO DESC, Descrizione, IdArticolo;
         await using var command = new SqlCommand(sql, connection);
         command.CommandTimeout = 120;
 
-        command.Parameters.AddWithValue("@Limit", Math.Clamp(filter.Limit, 1, 2000));
+        command.Parameters.AddWithValue("@Limit", Math.Clamp(filter.Limit, 1, 50000));
         command.Parameters.AddWithValue("@RotationId", (object?)filter.RotationId ?? DBNull.Value);
         command.Parameters.AddWithValue("@SupplierId", (object?)filter.SupplierId ?? DBNull.Value);
         command.Parameters.AddWithValue("@ManufacturerId", (object?)filter.ManufacturerId ?? DBNull.Value);
@@ -963,6 +963,27 @@ ORDER BY ValoreFIFO DESC, Descrizione, IdArticolo;
             6 => "VENDUTO NEGLI ULTIMI 6 MESI",
             _ => "NON CLASSIFICATO"
         };
+    }
+
+
+    public Task<IReadOnlyList<InventoryAnalysisItemDto>> GetReportItemsAsync(
+        InventoryAnalysisReportRequest request,
+        CancellationToken ct)
+    {
+        return GetItemsAsync(
+            new InventoryAnalysisFilterDto
+            {
+                RotationId = request.RotationId,
+                SupplierId = request.SupplierId,
+                ManufacturerId = request.ManufacturerId,
+                FamilyId = request.FamilyId,
+                SubFamilyId = request.SubFamilyId,
+                CategoryId = request.CategoryId,
+                SubCategoryId = request.SubCategoryId,
+                Q = request.Q,
+                Limit = 50000
+            },
+            ct);
     }
 
     private static decimal Number(
