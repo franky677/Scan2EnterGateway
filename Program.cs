@@ -117,6 +117,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/inventory-analysis/categories",
         "/api/inventory-analysis/subcategories",
         "/api/inventory-analysis/items",
+        "/api/inventory-analysis/classifications",
         "/api/favorites",
         "POST /api/favorites",
         "DELETE /api/favorites/{articleId}",
@@ -1495,6 +1496,63 @@ app.MapGet("/api/inventory-analysis/items", async (
     {
         return Results.Problem(
             title: "Errore lettura dettaglio analisi magazzino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+
+app.MapGet("/api/inventory-analysis/classifications", async (
+    string dimension,
+    int? familyId,
+    int? subFamilyId,
+    int? categoryId,
+    int? subCategoryId,
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var allowed = new HashSet<string>(
+            new[] { "family", "subfamily", "category", "subcategory" },
+            StringComparer.OrdinalIgnoreCase);
+
+        if (!allowed.Contains(dimension ?? ""))
+        {
+            return Results.BadRequest(new
+            {
+                message =
+                    "dimension deve essere family, subfamily, category oppure subcategory."
+            });
+        }
+
+        var filter = new InventoryAnalysisFilterDto
+        {
+            FamilyId = familyId,
+            SubFamilyId = subFamilyId,
+            CategoryId = categoryId,
+            SubCategoryId = subCategoryId
+        };
+
+        var items = await repository.GetClassificationSummaryAsync(
+            dimension,
+            filter,
+            ct);
+
+        return Results.Ok(new
+        {
+            dimension,
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            filter,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura classificazioni magazzino",
             detail: ex.Message,
             statusCode: 500);
     }

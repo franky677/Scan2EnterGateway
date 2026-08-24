@@ -568,6 +568,177 @@ ORDER BY FifoValue DESC;
         return result;
     }
 
+
+    public async Task<IReadOnlyList<InventoryDimensionSummaryDto>> GetClassificationSummaryAsync(
+        string dimension,
+        InventoryAnalysisFilterDto filter,
+        CancellationToken ct)
+    {
+        var normalized = (dimension ?? "").Trim().ToLowerInvariant();
+
+        var (idColumn, nameColumn, missingName) = normalized switch
+        {
+            "family" =>
+                ("IdFamiglia", "NomeFamiglia", "FAMIGLIA NON IDENTIFICATA"),
+            "subfamily" =>
+                ("IdSottoFamiglia", "NomeSottoFamiglia", "SOTTOFAMIGLIA NON IDENTIFICATA"),
+            "category" =>
+                ("IdCategoria", "NomeCategoria", "CATEGORIA NON IDENTIFICATA"),
+            "subcategory" =>
+                ("IdSottoCategoria", "NomeSottoCategoria", "SOTTOCATEGORIA NON IDENTIFICATA"),
+            _ => throw new ArgumentException(
+                "dimension deve essere family, subfamily, category oppure subcategory.")
+        };
+
+        var sql = $"""
+SET NOCOUNT ON;
+
+IF OBJECT_ID('tempdb..#Stock') IS NOT NULL DROP TABLE #Stock;
+IF OBJECT_ID('tempdb..#FIFO') IS NOT NULL DROP TABLE #FIFO;
+IF OBJECT_ID('tempdb..#Prezzi') IS NOT NULL DROP TABLE #Prezzi;
+IF OBJECT_ID('tempdb..#AnalisiBase') IS NOT NULL DROP TABLE #AnalisiBase;
+
+SELECT
+    g.IdArticolo,
+    g.Giacenza
+INTO #Stock
+FROM dbo.tabGiacenzeStoreView g
+INNER JOIN dbo.TabArticoli a
+    ON a.IdArticolo = g.IdArticolo
+WHERE g.idMagazzinoStore = 0
+  AND g.Giacenza > 0
+  AND a.Attivo = 1;
+
+SELECT
+    IdArticolo,
+    SUM(ValorizzazioneTot) AS ValoreFIFO
+INTO #FIFO
+FROM due_val.TabProdGiacFIFO
+WHERE IdMagazzino = 0
+  AND QtaTotAnalizzata > 0
+GROUP BY IdArticolo;
+
+SELECT
+    af.IdArticolo,
+    CAST(ISNULL(pa.Imponibile, 0) AS float) AS PrezzoNetto,
+    ISNULL(pa.Sconto1, 0) AS S1,
+    ISNULL(pa.Sconto2, 0) AS S2,
+    ISNULL(pa.Sconto3, 0) AS S3,
+    ISNULL(pa.Sconto4, 0) AS S4
+INTO #Prezzi
+FROM dbo.TabArticoliFornitori af
+INNER JOIN dbo.TabPrezziAcquisto pa
+    ON pa.IdFornitore = af.IdFornitore
+   AND pa.CodiceArticoloFornitore = af.CodiceArticoloFornitore
+WHERE af.Predefinito <> 0
+  AND ISNULL(pa.IdVariante1, -1) <= 0
+  AND ISNULL(pa.IdVariante2, -1) <= 0
+  AND ISNULL(pa.IdVariante3, -1) <= 0;
+
+UPDATE #Prezzi SET PrezzoNetto = PrezzoNetto * (1 - S1 / 100.0);
+UPDATE #Prezzi SET PrezzoNetto = PrezzoNetto * (1 - S2 / 100.0);
+UPDATE #Prezzi SET PrezzoNetto = PrezzoNetto * (1 - S3 / 100.0);
+UPDATE #Prezzi SET PrezzoNetto = PrezzoNetto * (1 - S4 / 100.0);
+
+SELECT
+    a.IdArticolo,
+    s.Giacenza,
+    a.IdFamiglia,
+    fam.NomeFamiglia,
+    a.IdSottoFamiglia,
+    sf.NomeSottoFamiglia,
+    a.IdCategoria,
+    cat.NomeCategoria,
+    a.IdSottoCategoria,
+    sc.NomeSottoCategoria,
+    a.TipoUmAcq,
+    a.TipoUmMag,
+    a.CoeffConversione,
+    ISNULL(p.PrezzoNetto, 0) AS PrezzoNetto,
+    ISNULL(f.ValoreFIFO, 0) AS ValoreFIFO
+INTO #AnalisiBase
+FROM #Stock s
+INNER JOIN dbo.TabArticoli a
+    ON a.IdArticolo = s.IdArticolo
+LEFT JOIN #FIFO f
+    ON f.IdArticolo = s.IdArticolo
+LEFT JOIN #Prezzi p
+    ON p.IdArticolo = s.IdArticolo
+LEFT JOIN dbo.TabFamiglie fam
+    ON fam.IdFamiglia = a.IdFamiglia
+LEFT JOIN dbo.TabSottoFamiglie sf
+    ON sf.IdFamiglia = a.IdFamiglia
+   AND sf.IdSottoFamiglia = a.IdSottoFamiglia
+LEFT JOIN dbo.tabCategorie cat
+    ON cat.IdCategoria = a.IdCategoria
+LEFT JOIN dbo.tabSottoCategorie sc
+    ON sc.IdCategoria = a.IdCategoria
+   AND sc.IdSottoCategoria = a.IdSottoCategoria;
+
+SELECT
+    {idColumn} AS DimensionId,
+    ISNULL(NULLIF(LTRIM(RTRIM({nameColumn})), ''), '{missingName}') AS DimensionName,
+    COUNT(*) AS Articles,
+    SUM(Giacenza) AS Quantity,
+    SUM(ValoreFIFO) AS FifoValue,
+    SUM(
+        Giacenza *
+        CASE
+            WHEN ISNULL(TipoUmAcq, 1) = ISNULL(TipoUmMag, 1)
+                THEN PrezzoNetto
+            WHEN ISNULL(CoeffConversione, 0) <= 0
+                THEN PrezzoNetto
+            WHEN TipoUmAcq = 1
+                THEN PrezzoNetto / CoeffConversione
+            ELSE
+                PrezzoNetto * CoeffConversione
+        END
+    ) AS PurchaseListValue
+FROM #AnalisiBase
+WHERE
+    (@FamilyId IS NULL OR IdFamiglia = @FamilyId)
+    AND (@SubFamilyId IS NULL OR IdSottoFamiglia = @SubFamilyId)
+    AND (@CategoryId IS NULL OR IdCategoria = @CategoryId)
+    AND (@SubCategoryId IS NULL OR IdSottoCategoria = @SubCategoryId)
+GROUP BY
+    {idColumn},
+    ISNULL(NULLIF(LTRIM(RTRIM({nameColumn})), ''), '{missingName}')
+ORDER BY FifoValue DESC, DimensionName;
+""";
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var command = new SqlCommand(sql, connection);
+        command.CommandTimeout = 120;
+
+        command.Parameters.AddWithValue("@FamilyId", (object?)filter.FamilyId ?? DBNull.Value);
+        command.Parameters.AddWithValue("@SubFamilyId", (object?)filter.SubFamilyId ?? DBNull.Value);
+        command.Parameters.AddWithValue("@CategoryId", (object?)filter.CategoryId ?? DBNull.Value);
+        command.Parameters.AddWithValue("@SubCategoryId", (object?)filter.SubCategoryId ?? DBNull.Value);
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var result = new List<InventoryDimensionSummaryDto>();
+
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new InventoryDimensionSummaryDto
+            {
+                Id = reader["DimensionId"] == DBNull.Value
+                    ? null
+                    : Convert.ToInt32(reader["DimensionId"]),
+                Name = Convert.ToString(reader["DimensionName"]) ?? "",
+                Articles = Convert.ToInt32(reader["Articles"]),
+                Quantity = Number(reader, "Quantity"),
+                FifoValue = Number(reader, "FifoValue"),
+                PurchaseListValue = Number(reader, "PurchaseListValue")
+            });
+        }
+
+        return result;
+    }
+
+
     private enum InventoryDimension
     {
         Manufacturer,
