@@ -31,6 +31,7 @@ public sealed class InventoryAnalysisItemDto
 
     public string ArticleCode { get; set; } = "";
     public string Description { get; set; } = "";
+    public string Barcode { get; set; } = "";
 
     public decimal Quantity { get; set; }
 

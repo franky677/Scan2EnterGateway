@@ -512,7 +512,26 @@ LEFT JOIN dbo.tabCategorie cat
     ON cat.IdCategoria = a.IdCategoria
 LEFT JOIN dbo.tabSottoCategorie sc
     ON sc.IdCategoria = a.IdCategoria
-   AND sc.IdSottoCategoria = a.IdSottoCategoria;
+   AND sc.IdSottoCategoria = a.IdSottoCategoria
+OUTER APPLY
+(
+    SELECT TOP (1)
+        LTRIM(RTRIM(b.BarCode)) AS Barcode
+    FROM dbo.tabBarcode b
+    WHERE b.idArticolo = a.IdArticolo
+      AND NULLIF(LTRIM(RTRIM(b.BarCode)), '') IS NOT NULL
+      AND ISNULL(b.Annullato, 0) = 0
+      AND ISNULL(b.idVariante1, 0) <= 0
+      AND ISNULL(b.idVariante2, 0) <= 0
+      AND ISNULL(b.idVariante3, 0) <= 0
+    ORDER BY
+        CASE
+            WHEN LEN(LTRIM(RTRIM(b.BarCode))) = 13 THEN 0
+            ELSE 1
+        END,
+        b.DataCreaz,
+        b.BarCode
+) barcode;
 
 SELECT
     {idColumn} AS DimensionId,
@@ -815,6 +834,7 @@ SELECT
     a.IdArticolo,
     a.CodiceArticolo,
     a.Descrizione,
+    ISNULL(barcode.Barcode, '') AS Barcode,
     s.Giacenza,
     uv.DataUltimaVendita,
     CASE
@@ -864,10 +884,29 @@ LEFT JOIN dbo.TabSottoFamiglie sf
 LEFT JOIN dbo.tabCategorie cat ON cat.IdCategoria = a.IdCategoria
 LEFT JOIN dbo.tabSottoCategorie sc
     ON sc.IdCategoria = a.IdCategoria
-   AND sc.IdSottoCategoria = a.IdSottoCategoria;
+   AND sc.IdSottoCategoria = a.IdSottoCategoria
+OUTER APPLY
+(
+    SELECT TOP (1)
+        LTRIM(RTRIM(b.BarCode)) AS Barcode
+    FROM dbo.tabBarcode b
+    WHERE b.idArticolo = a.IdArticolo
+      AND NULLIF(LTRIM(RTRIM(b.BarCode)), '') IS NOT NULL
+      AND ISNULL(b.Annullato, 0) = 0
+      AND ISNULL(b.idVariante1, 0) <= 0
+      AND ISNULL(b.idVariante2, 0) <= 0
+      AND ISNULL(b.idVariante3, 0) <= 0
+    ORDER BY
+        CASE
+            WHEN LEN(LTRIM(RTRIM(b.BarCode))) = 13 THEN 0
+            ELSE 1
+        END,
+        b.DataCreaz,
+        b.BarCode
+) barcode;
 
 SELECT TOP (@Limit)
-    IdArticolo, CodiceArticolo, Descrizione, Giacenza,
+    IdArticolo, CodiceArticolo, Descrizione, Barcode, Giacenza,
     DataUltimaVendita, StatoRotazioneId,
     IdFornitore, Fornitore,
     IdProduttore, Produttore,
@@ -925,6 +964,7 @@ ORDER BY ValoreFIFO DESC, Descrizione, IdArticolo;
                 ArticleId = Convert.ToInt32(reader["IdArticolo"]),
                 ArticleCode = Convert.ToString(reader["CodiceArticolo"]) ?? "",
                 Description = Convert.ToString(reader["Descrizione"]) ?? "",
+                Barcode = Convert.ToString(reader["Barcode"]) ?? "",
                 Quantity = Number(reader, "Giacenza"),
                 LastSaleDate = reader["DataUltimaVendita"] == DBNull.Value
                     ? null
