@@ -475,6 +475,280 @@ public sealed class ProductRepository
         return results;
     }
 
+
+    public async Task<ProductHealthDto?> GetHealthByBarcodeAsync(
+        string barcode,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(barcode))
+        {
+            return null;
+        }
+
+        const string sql = """
+            DECLARE @DataAnalisi datetime = GETDATE();
+
+            WITH Stock AS
+            (
+                SELECT
+                    g.IdArticolo,
+                    g.Barcode,
+                    SUM(f.Qty) AS GiacenzaFIFO,
+                    SUM(f.Val) AS ValoreFIFO
+                FROM dbo.tabGiacenzeStoreView AS g
+
+                CROSS APPLY due_val.GetFiFoByBarCodeAndWarehouse(
+                    @DataAnalisi,
+                    g.Barcode,
+                    g.idMagazzinoStore
+                ) AS f
+
+                WHERE g.idMagazzinoStore = @warehouseId
+                  AND LTRIM(RTRIM(g.Barcode)) = @barcode
+
+                GROUP BY
+                    g.IdArticolo,
+                    g.Barcode
+            ),
+
+            Vendite AS
+            (
+                SELECT
+                    d.IdArticolo,
+                    d.Barcode,
+                    MAX(t.DataDocumento) AS UltimaVendita,
+
+                    SUM(
+                        CASE
+                            WHEN t.DataDocumento >= DATEADD(YEAR, -1, @DataAnalisi)
+                             AND t.DataDocumento <= @DataAnalisi
+                            THEN ABS(d.QuantitaConSegno)
+                            ELSE 0
+                        END
+                    ) AS Venduto12M,
+
+                    SUM(
+                        CASE
+                            WHEN t.DataDocumento >= DATEADD(YEAR, -2, @DataAnalisi)
+                             AND t.DataDocumento <= @DataAnalisi
+                            THEN ABS(d.QuantitaConSegno)
+                            ELSE 0
+                        END
+                    ) AS Venduto24M
+
+                FROM dbo.tabDettaglioMagazzino AS d
+
+                INNER JOIN dbo.tabTestateMagazzino AS t
+                    ON t.IdTestata = d.IdTestata
+
+                WHERE LTRIM(RTRIM(d.Barcode)) = @barcode
+                  AND d.IdMagazzino = @warehouseId
+                  AND d.QuantitaConSegno < 0
+                  AND t.IdCausale IN (4, 25)
+                  AND t.DataDocumento <= @DataAnalisi
+
+                GROUP BY
+                    d.IdArticolo,
+                    d.Barcode
+            ),
+
+            Dati AS
+            (
+                SELECT
+                    s.IdArticolo,
+                    s.Barcode,
+                    s.GiacenzaFIFO,
+                    s.ValoreFIFO,
+                    v.UltimaVendita,
+                    ISNULL(v.Venduto12M, 0) AS Venduto12M,
+                    ISNULL(v.Venduto24M, 0) AS Venduto24M
+                FROM Stock AS s
+
+                LEFT JOIN Vendite AS v
+                    ON v.IdArticolo = s.IdArticolo
+                   AND v.Barcode = s.Barcode
+            )
+
+            SELECT
+                IdArticolo,
+                Barcode,
+
+                ROUND(GiacenzaFIFO, 0) AS GiacenzaFIFO,
+                ROUND(ValoreFIFO, 2) AS ValoreFIFO,
+
+                CASE
+                    WHEN GiacenzaFIFO > 0
+                    THEN ROUND(ValoreFIFO / GiacenzaFIFO, 4)
+                    ELSE 0
+                END AS CostoMedioFIFO,
+
+                UltimaVendita,
+
+                CASE
+                    WHEN UltimaVendita IS NULL
+                    THEN NULL
+                    ELSE DATEDIFF(DAY, UltimaVendita, @DataAnalisi)
+                END AS GiorniDaUltimaVendita,
+
+                Venduto12M,
+                Venduto24M,
+
+                CASE
+                    WHEN GiacenzaFIFO > 0
+                    THEN ROUND(Venduto12M / GiacenzaFIFO, 2)
+                    ELSE 0
+                END AS Rotazione12M,
+
+                CASE
+                    WHEN Venduto12M > 0
+                    THEN ROUND(
+                        GiacenzaFIFO / (Venduto12M / 12.0),
+                        1
+                    )
+                    ELSE NULL
+                END AS MesiCopertura,
+
+                CASE
+                    WHEN
+                        (
+                            UltimaVendita IS NULL
+                            OR UltimaVendita < DATEADD(YEAR, -7, @DataAnalisi)
+                        )
+                        AND ValoreFIFO >= 50
+                        THEN 'ROSSO'
+
+                    WHEN
+                        (
+                            UltimaVendita IS NULL
+                            OR UltimaVendita < DATEADD(YEAR, -7, @DataAnalisi)
+                        )
+                        AND ValoreFIFO >= 20
+                        AND ValoreFIFO < 50
+                        THEN 'ARANCIONE'
+
+                    WHEN
+                        UltimaVendita >= DATEADD(YEAR, -7, @DataAnalisi)
+                        AND UltimaVendita < DATEADD(YEAR, -3, @DataAnalisi)
+                        AND ValoreFIFO >= 50
+                        THEN 'GIALLO'
+
+                    ELSE 'OK'
+                END AS StatoSalute,
+
+                CASE
+                    WHEN UltimaVendita IS NULL
+                        THEN 'Mai venduto nello storico'
+
+                    WHEN UltimaVendita < DATEADD(YEAR, -7, @DataAnalisi)
+                        THEN 'Fermo da oltre 7 anni'
+
+                    WHEN UltimaVendita < DATEADD(YEAR, -3, @DataAnalisi)
+                        THEN 'Movimentazione molto lenta'
+
+                    WHEN Venduto12M = 0
+                        THEN 'Nessuna vendita negli ultimi 12 mesi'
+
+                    WHEN GiacenzaFIFO > 0
+                     AND Venduto12M > 0
+                     AND GiacenzaFIFO / (Venduto12M / 12.0) > 24
+                        THEN 'Copertura oltre 24 mesi'
+
+                    WHEN GiacenzaFIFO > 0
+                     AND Venduto12M > 0
+                     AND GiacenzaFIFO / (Venduto12M / 12.0) > 12
+                        THEN 'Copertura oltre 12 mesi'
+
+                    ELSE 'Regolare'
+                END AS DescrizioneSalute
+
+            FROM Dati;
+            """;
+
+        await using var connection =
+            new SqlConnection(_connectionString);
+
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command =
+            new SqlCommand(sql, connection);
+
+        command.Parameters.AddWithValue(
+            "@barcode",
+            barcode.Trim());
+
+        command.Parameters.AddWithValue(
+            "@warehouseId",
+            _warehouseId);
+
+        command.CommandTimeout = 60;
+
+        await using var reader =
+            await command.ExecuteReaderAsync(cancellationToken);
+
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        var ultimaVenditaOrdinal =
+            reader.GetOrdinal("UltimaVendita");
+
+        var giorniOrdinal =
+            reader.GetOrdinal("GiorniDaUltimaVendita");
+
+        var mesiCoperturaOrdinal =
+            reader.GetOrdinal("MesiCopertura");
+
+        return new ProductHealthDto
+        {
+            IdArticolo = GetInt64(reader, "IdArticolo"),
+            Barcode = GetString(reader, "Barcode"),
+
+            GiacenzaFifo =
+                GetNullableDecimal(reader, "GiacenzaFIFO") ?? 0m,
+
+            ValoreFifo =
+                GetNullableDecimal(reader, "ValoreFIFO") ?? 0m,
+
+            CostoMedioFifo =
+                GetNullableDecimal(reader, "CostoMedioFIFO") ?? 0m,
+
+            UltimaVendita =
+                reader.IsDBNull(ultimaVenditaOrdinal)
+                    ? null
+                    : reader.GetDateTime(ultimaVenditaOrdinal),
+
+            GiorniDaUltimaVendita =
+                reader.IsDBNull(giorniOrdinal)
+                    ? null
+                    : Convert.ToInt32(
+                        reader.GetValue(giorniOrdinal),
+                        CultureInfo.InvariantCulture),
+
+            Venduto12M =
+                GetNullableDecimal(reader, "Venduto12M") ?? 0m,
+
+            Venduto24M =
+                GetNullableDecimal(reader, "Venduto24M") ?? 0m,
+
+            Rotazione12M =
+                GetNullableDecimal(reader, "Rotazione12M") ?? 0m,
+
+            MesiCopertura =
+                reader.IsDBNull(mesiCoperturaOrdinal)
+                    ? null
+                    : Convert.ToDecimal(
+                        reader.GetValue(mesiCoperturaOrdinal),
+                        CultureInfo.InvariantCulture),
+
+            StatoSalute =
+                GetString(reader, "StatoSalute"),
+
+            DescrizioneSalute =
+                GetString(reader, "DescrizioneSalute")
+        };
+    }
+
     private static string GetString(
         SqlDataReader reader,
         string columnName)

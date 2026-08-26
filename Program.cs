@@ -98,6 +98,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/health/database",
         "/api/reorder-list",
         "/api/product/{barcode}",
+        "/api/product/{barcode}/health",
         "/api/product/{articleId}/price-lists",
         "PUT /api/product/{articleId}/price-lists/{priceListId}",
         "/api/search",
@@ -291,6 +292,38 @@ app.MapGet("/api/product/{barcode}", async (
     {
         return Results.Problem(
             title: "Unable to read product",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/product/{barcode}/health", async (
+    string barcode,
+    ProductRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var result =
+            await repository.GetHealthByBarcodeAsync(
+                barcode,
+                ct);
+
+        if (result is null)
+        {
+            return Results.NotFound(new
+            {
+                message = $"Salute articolo non disponibile per barcode '{barcode}'."
+            });
+        }
+
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura salute articolo",
             detail: ex.Message,
             statusCode: 500);
     }
