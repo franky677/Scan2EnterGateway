@@ -41,7 +41,9 @@ public sealed class InventoryAnalysisItemDto
     // Nei normali elenchi possono restare a zero/null.
     public decimal SoldPeriod { get; set; }
     public decimal Sold12M { get; set; }
+    public decimal SoldPrevious12M { get; set; }
     public decimal SoldHistorical { get; set; }
+    public decimal? TrendPercent { get; set; }
     public decimal? MonthsCoverage { get; set; }
 
     public int RotationId { get; set; }

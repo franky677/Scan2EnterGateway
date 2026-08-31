@@ -969,7 +969,7 @@ SELECT TOP (@Limit)
     CAST(
         CASE
             WHEN ISNULL(Venduto12M, 0) <= 0 THEN NULL
-            ELSE Giacenza / (Venduto12M / 12.0)
+            ELSE Giacenza / NULLIF((Venduto12M / 12.0), 0)
         END
         AS decimal(18,2)
     ) AS MesiCopertura
@@ -1020,6 +1020,12 @@ ORDER BY ValoreFIFO DESC, Descrizione, IdArticolo;
             var fifoValue = Number(reader, "ValoreFIFO");
             var sold12M = Number(reader, "Venduto12M");
             var soldPreviousYear = Number(reader, "VendutoAnnoPrecedente");
+            var trendPercent =
+                soldPreviousYear > 0m
+                    ? Math.Round(
+                        (sold12M - soldPreviousYear) / soldPreviousYear * 100m,
+                        2)
+                    : (decimal?)null;
             var monthsWithSales12M = Convert.ToInt32(reader["MesiConVendite12M"]);
             var monthsCoverage = reader["MesiCopertura"] == DBNull.Value
                 ? (decimal?)null
@@ -1400,10 +1406,11 @@ ORDER BY ValoreFIFO DESC, Descrizione, IdArticolo;
         var safePeriodMonths = Math.Clamp(periodMonths, 1, 120);
         var safeLimit = Math.Clamp(limit, 1, 50000);
 
-        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital"))
+        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital" or "growing" or "declining" or "low-stock-fast-moving" or "overstock"))
         {
             throw new ArgumentException(
-                "mode deve essere never-sold, top-sold, stopped oppure dead-capital.");
+                "mode deve essere never-sold, top-sold, stopped, dead-capital, " +
+                "growing, declining, low-stock-fast-moving oppure overstock.");
         }
 
         const string sql = """
@@ -1645,7 +1652,7 @@ SELECT TOP (@Limit)
     CAST(
         CASE
             WHEN ISNULL(Venduto12M, 0) <= 0 THEN NULL
-            ELSE Giacenza / (Venduto12M / 12.0)
+            ELSE Giacenza / NULLIF((Venduto12M / 12.0), 0)
         END
         AS decimal(18,2)
     ) AS MesiCopertura
@@ -1676,14 +1683,64 @@ WHERE
             OR DataUltimaVendita < DATEADD(MONTH, -6, @DataAnalisi)
         )
     )
+    OR
+    (
+        @Mode = 'growing'
+        AND ISNULL(VendutoAnnoPrecedente, 0) > 0
+        AND ISNULL(Venduto12M, 0) > ISNULL(VendutoAnnoPrecedente, 0)
+    )
+    OR
+    (
+        @Mode = 'declining'
+        AND ISNULL(VendutoAnnoPrecedente, 0) > 0
+        AND ISNULL(Venduto12M, 0) < ISNULL(VendutoAnnoPrecedente, 0)
+    )
+    OR
+    (
+        @Mode = 'low-stock-fast-moving'
+        AND ISNULL(Venduto12M, 0) > 0
+        AND Giacenza / NULLIF((Venduto12M / 12.0), 0) <= 3.0
+    )
+    OR
+    (
+        @Mode = 'overstock'
+        AND ISNULL(Venduto12M, 0) > 0
+        AND Giacenza / NULLIF((Venduto12M / 12.0), 0) >= 24.0
+    )
 ORDER BY
     CASE WHEN @Mode = 'never-sold' THEN ValoreFIFO END DESC,
     CASE WHEN @Mode = 'top-sold' THEN VendutoPeriodo END DESC,
-    CASE WHEN @Mode = 'stopped' THEN
-        CASE WHEN DataUltimaVendita IS NULL THEN 0 ELSE 1 END
-    END ASC,
     CASE WHEN @Mode = 'stopped' THEN DataUltimaVendita END ASC,
     CASE WHEN @Mode = 'dead-capital' THEN ValoreFIFO END DESC,
+
+    CASE WHEN @Mode = 'growing'
+        THEN ISNULL(Venduto12M, 0) - ISNULL(VendutoAnnoPrecedente, 0)
+    END DESC,
+    CASE WHEN @Mode = 'growing' AND ISNULL(VendutoAnnoPrecedente, 0) > 0
+        THEN
+            (ISNULL(Venduto12M, 0) - ISNULL(VendutoAnnoPrecedente, 0))
+            / VendutoAnnoPrecedente
+    END DESC,
+
+    CASE WHEN @Mode = 'declining'
+        THEN ISNULL(VendutoAnnoPrecedente, 0) - ISNULL(Venduto12M, 0)
+    END DESC,
+    CASE WHEN @Mode = 'declining' AND ISNULL(VendutoAnnoPrecedente, 0) > 0
+        THEN
+            (ISNULL(VendutoAnnoPrecedente, 0) - ISNULL(Venduto12M, 0))
+            / VendutoAnnoPrecedente
+    END DESC,
+
+    CASE WHEN @Mode = 'low-stock-fast-moving' AND ISNULL(Venduto12M, 0) > 0
+        THEN Giacenza / NULLIF((Venduto12M / 12.0), 0)
+    END ASC,
+    CASE WHEN @Mode = 'low-stock-fast-moving' THEN Venduto12M END DESC,
+
+    CASE WHEN @Mode = 'overstock' THEN ValoreFIFO END DESC,
+    CASE WHEN @Mode = 'overstock' AND ISNULL(Venduto12M, 0) > 0
+        THEN Giacenza / NULLIF((Venduto12M / 12.0), 0)
+    END DESC,
+
     ValoreFIFO DESC,
     Descrizione,
     IdArticolo;
@@ -1709,6 +1766,12 @@ ORDER BY
             var fifoValue = Number(reader, "ValoreFIFO");
             var sold12M = Number(reader, "Venduto12M");
             var soldPreviousYear = Number(reader, "VendutoAnnoPrecedente");
+            var trendPercent =
+                soldPreviousYear > 0m
+                    ? Math.Round(
+                        (sold12M - soldPreviousYear) / soldPreviousYear * 100m,
+                        2)
+                    : (decimal?)null;
             var monthsWithSales12M = Convert.ToInt32(reader["MesiConVendite12M"]);
             var monthsCoverage = reader["MesiCopertura"] == DBNull.Value
                 ? (decimal?)null
@@ -1739,7 +1802,9 @@ ORDER BY
                 LastSaleDate = lastSaleDate,
                 SoldPeriod = Number(reader, "VendutoPeriodo"),
                 Sold12M = sold12M,
+                SoldPrevious12M = soldPreviousYear,
                 SoldHistorical = Number(reader, "VendutoStorico"),
+                TrendPercent = trendPercent,
                 MonthsCoverage = monthsCoverage,
                 RotationId = rotationId,
                 Rotation = RotationName(rotationId),
@@ -1806,12 +1871,13 @@ ORDER BY
     {
         var stockDate = (request.StockDate ?? DateTime.Today).Date;
 
-        // Se il report nasce da INTERROGA MAGAZZINO, usa la stessa query
-        // della lista Android: stessi criteri, stesso periodo, stesso ordine.
-        if (!string.IsNullOrWhiteSpace(request.QueryMode))
+        var queryMode = (request.QueryMode ?? "").Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(queryMode))
         {
+            // I report di Interroga Magazzino devono usare esattamente
+            // lo stesso motore e lo stesso ordinamento della lista Android.
             return QueryInventoryAsync(
-                request.QueryMode,
+                queryMode,
                 Math.Clamp(request.PeriodMonths ?? 12, 1, 120),
                 50000,
                 ct);
@@ -2173,7 +2239,7 @@ SELECT TOP (@Limit)
     CAST(
         CASE
             WHEN ISNULL(Venduto12M, 0) <= 0 THEN NULL
-            ELSE Giacenza / (Venduto12M / 12.0)
+            ELSE Giacenza / NULLIF((Venduto12M / 12.0), 0)
         END
         AS decimal(18,2)
     ) AS MesiCopertura

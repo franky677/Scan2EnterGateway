@@ -1553,12 +1553,13 @@ app.MapGet("/api/inventory-analysis/query", async (
     {
         var normalizedMode = (mode ?? "").Trim().ToLowerInvariant();
 
-        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital"))
+        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital" or "growing" or "declining" or "low-stock-fast-moving" or "overstock"))
         {
             return Results.BadRequest(new
             {
                 message =
-                    "mode deve essere never-sold, top-sold, stopped oppure dead-capital."
+                    "mode deve essere never-sold, top-sold, stopped, dead-capital, " +
+                    "growing, declining, low-stock-fast-moving oppure overstock."
             });
         }
 
@@ -1577,6 +1578,10 @@ app.MapGet("/api/inventory-analysis/query", async (
             "top-sold" => $"PIÙ VENDUTI - ULTIMI {selectedPeriodMonths} MESI",
             "stopped" => $"FERMI DA ALMENO {selectedPeriodMonths} MESI",
             "dead-capital" => "CAPITALE FERMO",
+            "growing" => "IN CRESCITA - 12 MESI VS 12 PRECEDENTI",
+            "declining" => "IN CALO - 12 MESI VS 12 PRECEDENTI",
+            "low-stock-fast-moving" => "ALTA ROTAZIONE / POCA GIACENZA",
+            "overstock" => "SOVRASTOCK",
             _ => normalizedMode
         };
 
@@ -1624,17 +1629,6 @@ app.MapPost("/api/inventory-analysis/report", async (
         }
 
         var stockDate = (request.StockDate ?? DateTime.Today).Date;
-
-        var queryMode = (request.QueryMode ?? "").Trim().ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(queryMode) &&
-            queryMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital"))
-        {
-            return Results.BadRequest(new
-            {
-                message = "queryMode deve essere never-sold, top-sold, stopped oppure dead-capital."
-            });
-        }
-
         if (stockDate > DateTime.Today)
         {
             return Results.BadRequest(new
@@ -1727,21 +1721,6 @@ app.MapPost("/api/inventory-analysis/report", async (
         if (request.ShowHealthBars) extraHeaders.Append("""<th class="health-col">Salute</th>""");
 
         var options = new List<string>();
-
-        if (!string.IsNullOrWhiteSpace(queryMode))
-        {
-            var period = Math.Clamp(request.PeriodMonths ?? 12, 1, 120);
-            var queryLabel = queryMode switch
-            {
-                "never-sold" => "mai venduti",
-                "top-sold" => $"più venduti ultimi {period} mesi",
-                "stopped" => $"fermi da almeno {period} mesi",
-                "dead-capital" => "capitale fermo",
-                _ => queryMode
-            };
-            options.Add(queryLabel);
-        }
-
         if (request.ShowHealthBars) options.Add("salute");
         if (request.ShowLastSale) options.Add("ultima vendita");
         if (request.ShowSupplier) options.Add("fornitore");
