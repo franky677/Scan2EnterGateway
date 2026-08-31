@@ -18,6 +18,8 @@ public class ProductInfoDto
 
     public string PublicPrice { get; set; } = "";
 
+    public string PurchaseTaxable { get; set; } = "";
+
     public string Season { get; set; } = "";
 
     public string Year { get; set; } = "";

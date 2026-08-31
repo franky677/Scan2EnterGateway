@@ -40,6 +40,7 @@ public sealed class ProductRepository
                 a.Stagione_Periodicita,
                 price.Imponibile,
                 price.PrezzoVendita,
+                purchase.Imponibile AS PurchaseTaxable,
                 g.Giacenza,
                 g.Disponibile,
                 s.ScortaMinima,
@@ -86,6 +87,19 @@ public sealed class ProductRepository
                     pv.DataAgg DESC,
                     pv.OraAgg DESC
             ) AS price
+            OUTER APPLY
+            (
+                SELECT TOP (1)
+                    p.Imponibile
+                FROM dbo.TabPrezziAcquisto AS p
+                WHERE p.idFornitore = af.IdFornitore
+                  AND LTRIM(RTRIM(p.CodiceArticoloFornitore)) =
+                      LTRIM(RTRIM(af.CodiceArticoloFornitore))
+                  AND ISNULL(p.idVariante1, -1) = -1
+                  AND ISNULL(p.idVariante2, -1) = -1
+                  AND ISNULL(p.idVariante3, -1) = -1
+                ORDER BY p.dataAgg DESC
+            ) AS purchase
             WHERE LTRIM(RTRIM(b.Barcode)) = @barcode
             ORDER BY
                 ua.DataAgg DESC,
@@ -120,6 +134,7 @@ public sealed class ProductRepository
             TaxablePrice = GetNumberAsString(reader, "Imponibile"),
             VatRate = GetNumberAsString(reader, "AliquotaIva"),
             PublicPrice = GetNumberAsString(reader, "PrezzoVendita"),
+            PurchaseTaxable = GetNumberAsString(reader, "PurchaseTaxable"),
 
             Season = GetString(reader, "Stagione_Periodicita"),
             Year = GetString(reader, "Stagione_Anno"),
@@ -511,45 +526,93 @@ public sealed class ProductRepository
                     g.Barcode
             ),
 
+            VenditeDocumenti AS
+            (
+                -- Scontrini: fonte commerciale immediata.
+                SELECT
+                    d.IdArticolo,
+                    LTRIM(RTRIM(d.Barcode)) AS Barcode,
+                    CAST(t.DataOraScontrino AS datetime) AS DataVendita,
+                    ABS(CAST(d.Quantita AS decimal(18, 4))) AS Quantita
+                FROM dbo.tabDettaglioScontrini AS d
+                INNER JOIN dbo.tabTestateScontrini AS t
+                    ON t.IdTestata = d.IdTestata
+                WHERE LTRIM(RTRIM(d.Barcode)) = @barcode
+                  AND t.IdCausale = 4
+                  AND d.IdArticolo IS NOT NULL
+                  AND d.IdArticolo > 0
+                  AND ISNULL(d.Quantita, 0) <> 0
+                  AND t.DataOraScontrino <= @DataAnalisi
+
+                UNION ALL
+
+                -- Fatture: fonte commerciale originale.
+                -- Non leggiamo anche i movimenti di magazzino causale 25,
+                -- perche' rappresentano le stesse vendite e causerebbero doppioni.
+                SELECT
+                    d.IdArticolo,
+                    LTRIM(RTRIM(d.Barcode)) AS Barcode,
+                    CAST(t.DataDocumento AS datetime) AS DataVendita,
+                    ABS(CAST(d.Quantita AS decimal(18, 4))) AS Quantita
+                FROM dbo.tabDettaglioFatture AS d
+                INNER JOIN dbo.tabTestateFatture AS t
+                    ON t.IdTestata = d.IdTestata
+                WHERE LTRIM(RTRIM(d.Barcode)) = @barcode
+                  AND t.IdCausale = 27
+                  AND d.IdArticolo IS NOT NULL
+                  AND d.IdArticolo > 0
+                  AND ISNULL(d.Quantita, 0) <> 0
+                  AND t.DataDocumento <= @DataAnalisi
+            ),
+
             Vendite AS
             (
                 SELECT
-                    d.IdArticolo,
-                    d.Barcode,
-                    MAX(t.DataDocumento) AS UltimaVendita,
+                    IdArticolo,
+                    Barcode,
+                    MAX(DataVendita) AS UltimaVendita,
 
                     SUM(
                         CASE
-                            WHEN t.DataDocumento >= DATEADD(YEAR, -1, @DataAnalisi)
-                             AND t.DataDocumento <= @DataAnalisi
-                            THEN ABS(d.QuantitaConSegno)
+                            WHEN DataVendita >= DATEADD(YEAR, -1, @DataAnalisi)
+                             AND DataVendita <= @DataAnalisi
+                            THEN Quantita
                             ELSE 0
                         END
                     ) AS Venduto12M,
 
                     SUM(
                         CASE
-                            WHEN t.DataDocumento >= DATEADD(YEAR, -2, @DataAnalisi)
-                             AND t.DataDocumento <= @DataAnalisi
-                            THEN ABS(d.QuantitaConSegno)
+                            WHEN DataVendita >= DATEADD(YEAR, -2, @DataAnalisi)
+                             AND DataVendita <= @DataAnalisi
+                            THEN Quantita
                             ELSE 0
                         END
-                    ) AS Venduto24M
+                    ) AS Venduto24M,
 
-                FROM dbo.tabDettaglioMagazzino AS d
+                    SUM(
+                        CASE
+                            WHEN DataVendita >= DATEADD(YEAR, -2, @DataAnalisi)
+                             AND DataVendita < DATEADD(YEAR, -1, @DataAnalisi)
+                            THEN Quantita
+                            ELSE 0
+                        END
+                    ) AS VendutoAnnoPrecedente,
 
-                INNER JOIN dbo.tabTestateMagazzino AS t
-                    ON t.IdTestata = d.IdTestata
+                    COUNT(
+                        DISTINCT CASE
+                            WHEN DataVendita >= DATEADD(YEAR, -1, @DataAnalisi)
+                             AND DataVendita <= @DataAnalisi
+                            THEN YEAR(DataVendita) * 100
+                               + MONTH(DataVendita)
+                        END
+                    ) AS MesiConVendite12M
 
-                WHERE LTRIM(RTRIM(d.Barcode)) = @barcode
-                  AND d.IdMagazzino = @warehouseId
-                  AND d.QuantitaConSegno < 0
-                  AND t.IdCausale IN (4, 25)
-                  AND t.DataDocumento <= @DataAnalisi
+                FROM VenditeDocumenti
 
                 GROUP BY
-                    d.IdArticolo,
-                    d.Barcode
+                    IdArticolo,
+                    Barcode
             ),
 
             Dati AS
@@ -561,7 +624,9 @@ public sealed class ProductRepository
                     s.ValoreFIFO,
                     v.UltimaVendita,
                     ISNULL(v.Venduto12M, 0) AS Venduto12M,
-                    ISNULL(v.Venduto24M, 0) AS Venduto24M
+                    ISNULL(v.Venduto24M, 0) AS Venduto24M,
+                    ISNULL(v.VendutoAnnoPrecedente, 0) AS VendutoAnnoPrecedente,
+                    ISNULL(v.MesiConVendite12M, 0) AS MesiConVendite12M
                 FROM Stock AS s
 
                 LEFT JOIN Vendite AS v
@@ -592,6 +657,8 @@ public sealed class ProductRepository
 
                 Venduto12M,
                 Venduto24M,
+                VendutoAnnoPrecedente,
+                MesiConVendite12M,
 
                 CASE
                     WHEN GiacenzaFIFO > 0
@@ -699,54 +766,397 @@ public sealed class ProductRepository
         var mesiCoperturaOrdinal =
             reader.GetOrdinal("MesiCopertura");
 
+        var ultimaVendita =
+            reader.IsDBNull(ultimaVenditaOrdinal)
+                ? (DateTime?)null
+                : reader.GetDateTime(ultimaVenditaOrdinal);
+
+        var giorniDaUltimaVendita =
+            reader.IsDBNull(giorniOrdinal)
+                ? (int?)null
+                : Convert.ToInt32(
+                    reader.GetValue(giorniOrdinal),
+                    CultureInfo.InvariantCulture);
+
+        var venduto12M =
+            GetNullableDecimal(reader, "Venduto12M") ?? 0m;
+
+        var venduto24M =
+            GetNullableDecimal(reader, "Venduto24M") ?? 0m;
+
+        var vendutoAnnoPrecedente =
+            GetNullableDecimal(reader, "VendutoAnnoPrecedente") ?? 0m;
+
+        var mesiConVendite12M =
+            Math.Min(
+                12,
+                Convert.ToInt32(
+                    reader.GetValue(
+                        reader.GetOrdinal("MesiConVendite12M")),
+                    CultureInfo.InvariantCulture));
+
+        var giacenzaFifo =
+            GetNullableDecimal(reader, "GiacenzaFIFO") ?? 0m;
+
+        var valoreFifo =
+            GetNullableDecimal(reader, "ValoreFIFO") ?? 0m;
+
+        var costoMedioFifo =
+            GetNullableDecimal(reader, "CostoMedioFIFO") ?? 0m;
+
+        var rotazione12M =
+            GetNullableDecimal(reader, "Rotazione12M") ?? 0m;
+
+        var mesiCopertura =
+            reader.IsDBNull(mesiCoperturaOrdinal)
+                ? (decimal?)null
+                : Convert.ToDecimal(
+                    reader.GetValue(mesiCoperturaOrdinal),
+                    CultureInfo.InvariantCulture);
+
+        var punteggioCommerciale =
+            CalculateCommercialScore(
+                ultimaVendita,
+                venduto12M,
+                vendutoAnnoPrecedente,
+                mesiConVendite12M);
+
+        var punteggioEconomico =
+            CalculateEconomicScore(
+                valoreFifo,
+                venduto12M,
+                mesiCopertura,
+                ultimaVendita);
+
         return new ProductHealthDto
         {
             IdArticolo = GetInt64(reader, "IdArticolo"),
             Barcode = GetString(reader, "Barcode"),
 
-            GiacenzaFifo =
-                GetNullableDecimal(reader, "GiacenzaFIFO") ?? 0m,
+            GiacenzaFifo = giacenzaFifo,
+            ValoreFifo = valoreFifo,
+            CostoMedioFifo = costoMedioFifo,
 
-            ValoreFifo =
-                GetNullableDecimal(reader, "ValoreFIFO") ?? 0m,
+            UltimaVendita = ultimaVendita,
+            GiorniDaUltimaVendita = giorniDaUltimaVendita,
 
-            CostoMedioFifo =
-                GetNullableDecimal(reader, "CostoMedioFIFO") ?? 0m,
+            Venduto12M = venduto12M,
+            Venduto24M = venduto24M,
+            VendutoAnnoPrecedente = vendutoAnnoPrecedente,
+            MesiConVendite12M = mesiConVendite12M,
 
-            UltimaVendita =
-                reader.IsDBNull(ultimaVenditaOrdinal)
-                    ? null
-                    : reader.GetDateTime(ultimaVenditaOrdinal),
+            Rotazione12M = rotazione12M,
+            MesiCopertura = mesiCopertura,
 
-            GiorniDaUltimaVendita =
-                reader.IsDBNull(giorniOrdinal)
-                    ? null
-                    : Convert.ToInt32(
-                        reader.GetValue(giorniOrdinal),
-                        CultureInfo.InvariantCulture),
-
-            Venduto12M =
-                GetNullableDecimal(reader, "Venduto12M") ?? 0m,
-
-            Venduto24M =
-                GetNullableDecimal(reader, "Venduto24M") ?? 0m,
-
-            Rotazione12M =
-                GetNullableDecimal(reader, "Rotazione12M") ?? 0m,
-
-            MesiCopertura =
-                reader.IsDBNull(mesiCoperturaOrdinal)
-                    ? null
-                    : Convert.ToDecimal(
-                        reader.GetValue(mesiCoperturaOrdinal),
-                        CultureInfo.InvariantCulture),
-
+            // V1: mantenuta invariata per compatibilita' con Android attuale.
             StatoSalute =
                 GetString(reader, "StatoSalute"),
 
             DescrizioneSalute =
-                GetString(reader, "DescrizioneSalute")
+                GetString(reader, "DescrizioneSalute"),
+
+            // V2: indici continui 0-100.
+            PunteggioCommerciale = punteggioCommerciale,
+            PunteggioEconomico = punteggioEconomico,
+
+            DescrizioneCommerciale =
+                BuildCommercialDescription(
+                    ultimaVendita,
+                    venduto12M,
+                    vendutoAnnoPrecedente,
+                    mesiConVendite12M),
+
+            DescrizioneEconomica =
+                BuildEconomicDescription(
+                    valoreFifo,
+                    venduto12M,
+                    mesiCopertura,
+                    ultimaVendita)
         };
+    }
+
+    private static int CalculateCommercialScore(
+        DateTime? ultimaVendita,
+        decimal venduto12M,
+        decimal vendutoAnnoPrecedente,
+        int mesiConVendite12M)
+    {
+        var now = DateTime.Now;
+
+        var puntiRecenza =
+            ultimaVendita is null ? 45 :
+            ultimaVendita < now.AddYears(-10) ? 45 :
+            ultimaVendita < now.AddYears(-7) ? 42 :
+            ultimaVendita < now.AddYears(-5) ? 38 :
+            ultimaVendita < now.AddYears(-3) ? 34 :
+            ultimaVendita < now.AddYears(-2) ? 30 :
+            ultimaVendita < now.AddYears(-1) ? 25 :
+            ultimaVendita < now.AddMonths(-6) ? 18 :
+            ultimaVendita < now.AddMonths(-3) ? 10 :
+            ultimaVendita < now.AddMonths(-1) ? 5 :
+            0;
+
+        var puntiContinuita =
+            mesiConVendite12M <= 0 ? 18 :
+            mesiConVendite12M == 1 ? 16 :
+            mesiConVendite12M == 2 ? 13 :
+            mesiConVendite12M == 3 ? 10 :
+            mesiConVendite12M <= 5 ? 7 :
+            mesiConVendite12M <= 7 ? 4 :
+            mesiConVendite12M <= 9 ? 2 :
+            0;
+
+        int puntiAndamento;
+
+        if (venduto12M <= 0m && vendutoAnnoPrecedente > 0m)
+        {
+            puntiAndamento = 15;
+        }
+        else if (venduto12M <= 0m && vendutoAnnoPrecedente <= 0m)
+        {
+            puntiAndamento = 12;
+        }
+        else if (vendutoAnnoPrecedente <= 0m && venduto12M > 0m)
+        {
+            puntiAndamento = 2;
+        }
+        else if (venduto12M <= vendutoAnnoPrecedente * 0.50m)
+        {
+            puntiAndamento = 12;
+        }
+        else if (venduto12M < vendutoAnnoPrecedente * 0.75m)
+        {
+            puntiAndamento = 9;
+        }
+        else if (venduto12M < vendutoAnnoPrecedente)
+        {
+            puntiAndamento = 6;
+        }
+        else if (venduto12M >= vendutoAnnoPrecedente * 1.25m)
+        {
+            puntiAndamento = 0;
+        }
+        else
+        {
+            puntiAndamento = 3;
+        }
+
+        var puntiIntensita =
+            venduto12M <= 0m ? 10 :
+            venduto12M <= 1m ? 9 :
+            venduto12M <= 3m ? 7 :
+            venduto12M <= 6m ? 5 :
+            venduto12M <= 12m ? 3 :
+            venduto12M <= 24m ? 1 :
+            0;
+
+        var score =
+            puntiRecenza +
+            puntiContinuita +
+            puntiAndamento +
+            puntiIntensita;
+
+        // Regole forti della simulazione V0.2.
+        if (ultimaVendita is null)
+        {
+            return 100;
+        }
+
+        if (ultimaVendita < now.AddYears(-10))
+        {
+            return 100;
+        }
+
+        if (ultimaVendita < now.AddYears(-7))
+        {
+            score = Math.Max(score, 90);
+        }
+        else if (ultimaVendita < now.AddYears(-5))
+        {
+            score = Math.Max(score, 80);
+        }
+
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private static int CalculateEconomicScore(
+        decimal valoreFifo,
+        decimal venduto12M,
+        decimal? mesiCopertura,
+        DateTime? ultimaVendita)
+    {
+        var now = DateTime.Now;
+
+        var puntiValore =
+            valoreFifo < 1m ? 0 :
+            valoreFifo < 5m ? 5 :
+            valoreFifo < 10m ? 10 :
+            valoreFifo < 20m ? 15 :
+            valoreFifo < 50m ? 22 :
+            valoreFifo < 100m ? 30 :
+            valoreFifo < 250m ? 37 :
+            valoreFifo < 500m ? 42 :
+            45;
+
+        int puntiImmobilizzazione;
+
+        if (venduto12M > 0m && mesiCopertura.HasValue)
+        {
+            var copertura = mesiCopertura.Value;
+
+            puntiImmobilizzazione =
+                copertura <= 3m ? 0 :
+                copertura <= 6m ? 5 :
+                copertura <= 12m ? 10 :
+                copertura <= 18m ? 15 :
+                copertura <= 24m ? 20 :
+                copertura <= 36m ? 28 :
+                copertura <= 60m ? 35 :
+                42;
+        }
+        else
+        {
+            puntiImmobilizzazione =
+                ultimaVendita is null ? 55 :
+                ultimaVendita < now.AddYears(-10) ? 55 :
+                ultimaVendita < now.AddYears(-7) ? 50 :
+                ultimaVendita < now.AddYears(-5) ? 45 :
+                ultimaVendita < now.AddYears(-3) ? 38 :
+                ultimaVendita < now.AddYears(-2) ? 32 :
+                ultimaVendita < now.AddYears(-1) ? 25 :
+                20;
+        }
+
+        return Math.Clamp(
+            puntiValore + puntiImmobilizzazione,
+            0,
+            100);
+    }
+
+    private static string BuildCommercialDescription(
+        DateTime? ultimaVendita,
+        decimal venduto12M,
+        decimal vendutoAnnoPrecedente,
+        int mesiConVendite12M)
+    {
+        var now = DateTime.Now;
+
+        if (ultimaVendita is null)
+        {
+            return "Mai venduto nello storico";
+        }
+
+        if (ultimaVendita < now.AddYears(-10))
+        {
+            return "Fermo da oltre 10 anni";
+        }
+
+        if (ultimaVendita < now.AddYears(-7))
+        {
+            return "Fermo da 7-10 anni";
+        }
+
+        if (ultimaVendita < now.AddYears(-5))
+        {
+            return "Fermo da 5-7 anni";
+        }
+
+        if (venduto12M <= 0m)
+        {
+            return "Nessuna vendita negli ultimi 12 mesi";
+        }
+
+        if (vendutoAnnoPrecedente > 0m &&
+            venduto12M <= vendutoAnnoPrecedente * 0.50m)
+        {
+            return "Vendite in forte calo rispetto all'anno precedente";
+        }
+
+        if (vendutoAnnoPrecedente <= 0m && venduto12M > 0m)
+        {
+            return "Articolo nuovo o ripartito nelle vendite";
+        }
+
+        if (mesiConVendite12M >= 10 &&
+            vendutoAnnoPrecedente > 0m &&
+            venduto12M >= vendutoAnnoPrecedente * 1.25m)
+        {
+            return "Vendite continue e in crescita";
+        }
+
+        if (mesiConVendite12M >= 7)
+        {
+            return "Vendite regolari durante l'anno";
+        }
+
+        if (mesiConVendite12M >= 4)
+        {
+            return "Vendite discontinue ma presenti";
+        }
+
+        return "Vendite occasionali";
+    }
+
+    private static string BuildEconomicDescription(
+        decimal valoreFifo,
+        decimal venduto12M,
+        decimal? mesiCopertura,
+        DateTime? ultimaVendita)
+    {
+        if (valoreFifo < 1m)
+        {
+            return "Capitale immobilizzato trascurabile";
+        }
+
+        if (venduto12M > 0m && mesiCopertura.HasValue)
+        {
+            var copertura = mesiCopertura.Value;
+
+            if (copertura <= 3m)
+            {
+                return $"FIFO {valoreFifo:0.00} € - copertura fino a 3 mesi";
+            }
+
+            if (copertura <= 6m)
+            {
+                return $"FIFO {valoreFifo:0.00} € - copertura 3-6 mesi";
+            }
+
+            if (copertura <= 12m)
+            {
+                return $"FIFO {valoreFifo:0.00} € - copertura 6-12 mesi";
+            }
+
+            if (copertura <= 24m)
+            {
+                return $"FIFO {valoreFifo:0.00} € - copertura 12-24 mesi";
+            }
+
+            if (copertura <= 60m)
+            {
+                return $"FIFO {valoreFifo:0.00} € - copertura molto lunga";
+            }
+
+            return $"FIFO {valoreFifo:0.00} € - copertura oltre 5 anni";
+        }
+
+        if (ultimaVendita is null)
+        {
+            return $"FIFO {valoreFifo:0.00} € - mai venduto";
+        }
+
+        var anniFermo =
+            Math.Max(
+                0,
+                (int)Math.Floor(
+                    (DateTime.Now - ultimaVendita.Value).TotalDays / 365.25));
+
+        if (anniFermo >= 1)
+        {
+            return $"FIFO {valoreFifo:0.00} € - nessuna vendita 12M, fermo da circa {anniFermo} anni";
+        }
+
+        return $"FIFO {valoreFifo:0.00} € - nessuna vendita negli ultimi 12 mesi";
     }
 
     private static string GetString(
@@ -834,4 +1244,3 @@ public sealed class ProductRepository
             CultureInfo.InvariantCulture);
     }
 }
-

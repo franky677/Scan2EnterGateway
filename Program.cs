@@ -118,6 +118,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/inventory-analysis/categories",
         "/api/inventory-analysis/subcategories",
         "/api/inventory-analysis/items",
+        "/api/inventory-analysis/query",
         "/api/inventory-analysis/classifications",
         "POST /api/inventory-analysis/report",
         "/api/favorites",
@@ -1537,6 +1538,75 @@ app.MapGet("/api/inventory-analysis/items", async (
 
 
 
+
+// INTERROGA MAGAZZINO:
+// oltre ai dati standard articolo restituisce anche SoldPeriod, Sold12M,
+// SoldHistorical e MonthsCoverage per costruire liste/report analitici.
+app.MapGet("/api/inventory-analysis/query", async (
+    string mode,
+    int? periodMonths,
+    int? limit,
+    InventoryAnalysisRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var normalizedMode = (mode ?? "").Trim().ToLowerInvariant();
+
+        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital"))
+        {
+            return Results.BadRequest(new
+            {
+                message =
+                    "mode deve essere never-sold, top-sold, stopped oppure dead-capital."
+            });
+        }
+
+        var selectedPeriodMonths = Math.Clamp(periodMonths ?? 12, 1, 120);
+        var selectedLimit = Math.Clamp(limit ?? 200, 1, 50000);
+
+        var items = await repository.QueryInventoryAsync(
+            normalizedMode,
+            selectedPeriodMonths,
+            selectedLimit,
+            ct);
+
+        var modeTitle = normalizedMode switch
+        {
+            "never-sold" => "MAI VENDUTI",
+            "top-sold" => $"PIÙ VENDUTI - ULTIMI {selectedPeriodMonths} MESI",
+            "stopped" => $"FERMI DA ALMENO {selectedPeriodMonths} MESI",
+            "dead-capital" => "CAPITALE FERMO",
+            _ => normalizedMode
+        };
+
+        return Results.Ok(new
+        {
+            mode = normalizedMode,
+            title = modeTitle,
+            periodMonths = selectedPeriodMonths,
+            count = items.Count,
+            generatedAt = DateTimeOffset.Now,
+            items
+        });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new
+        {
+            message = ex.Message
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore interrogazione Analisi Magazzino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
 app.MapPost("/api/inventory-analysis/report", async (
     InventoryAnalysisReportRequest request,
     InventoryAnalysisRepository repository,
@@ -1553,6 +1623,26 @@ app.MapPost("/api/inventory-analysis/report", async (
             });
         }
 
+        var stockDate = (request.StockDate ?? DateTime.Today).Date;
+
+        var queryMode = (request.QueryMode ?? "").Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(queryMode) &&
+            queryMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital"))
+        {
+            return Results.BadRequest(new
+            {
+                message = "queryMode deve essere never-sold, top-sold, stopped oppure dead-capital."
+            });
+        }
+
+        if (stockDate > DateTime.Today)
+        {
+            return Results.BadRequest(new
+            {
+                message = "La data di valorizzazione non può essere futura."
+            });
+        }
+
         var items = await repository.GetReportItemsAsync(request, ct);
 
         static string H(string? value) =>
@@ -1564,24 +1654,101 @@ app.MapPost("/api/inventory-analysis/report", async (
         static string Q(decimal value) =>
             value.ToString("N3", System.Globalization.CultureInfo.GetCultureInfo("it-IT"));
 
+        static string D(DateTime? value) =>
+            value.HasValue ? value.Value.ToString("dd/MM/yy") : "-";
+
+        static string Clip(string? value, int max)
+        {
+            var s = (value ?? "").Trim();
+            return s.Length <= max ? s : s[..Math.Max(0, max - 1)] + "…";
+        }
+
+        static string Classification(InventoryAnalysisItemDto x)
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(x.Family)) parts.Add(x.Family.Trim());
+            if (!string.IsNullOrWhiteSpace(x.SubFamily)) parts.Add(x.SubFamily.Trim());
+            if (!string.IsNullOrWhiteSpace(x.Category)) parts.Add(x.Category.Trim());
+            if (!string.IsNullOrWhiteSpace(x.SubCategory)) parts.Add(x.SubCategory.Trim());
+            return string.Join(" / ", parts);
+        }
+
+        static string HealthCell(int commercial, int economic)
+        {
+            var c = Math.Clamp(commercial, 0, 100);
+            var e = Math.Clamp(economic, 0, 100);
+
+            return $"""
+<div class="health-cell">
+  <div class="health-one-line">
+    <span class="health-code">C</span>
+    <span class="health-track">
+      <span class="health-marker" style="left:{c}%"></span>
+    </span>
+    <span class="health-score">{c}</span>
+
+    <span class="health-code health-code-e">E</span>
+    <span class="health-track">
+      <span class="health-marker" style="left:{e}%"></span>
+    </span>
+    <span class="health-score">{e}</span>
+  </div>
+</div>
+""" ;
+        }
+
         var title = string.IsNullOrWhiteSpace(request.Title)
-            ? "ANALISI MAGAZZINO"
+            ? "VALORIZZAZIONE MERCE DI MAGAZZINO"
             : request.Title.Trim();
 
-        var valuationTitle = valuation == "fifo"
-            ? "FIFO"
-            : "LISTINO ACQUISTO";
-
+        var valuationTitle = valuation == "fifo" ? "FIFO" : "LISTINO ACQUISTO";
         var totalQuantity = items.Sum(x => x.Quantity);
-        var totalValue = items.Sum(x =>
-            valuation == "fifo" ? x.FifoValue : x.PurchaseListValue);
+        var totalValue = items.Sum(x => valuation == "fifo" ? x.FifoValue : x.PurchaseListValue);
 
-        const int rowsPerPage = 46;
+        var extendedReport =
+            request.ShowHealthBars ||
+            request.ShowLastSale ||
+            request.ShowSupplier ||
+            request.ShowManufacturer ||
+            request.ShowClassification;
+
+        // Una sola riga per articolo: verticale essenziale, orizzontale esteso.
+        var rowsPerPage = extendedReport ? 48 : 52;
 
         var pageCount = Math.Max(
             1,
             (int)Math.Ceiling(items.Count / (double)rowsPerPage));
 
+        var extraHeaders = new System.Text.StringBuilder();
+        if (request.ShowLastSale) extraHeaders.Append("""<th class="date-col">Ult. vendita</th>""");
+        if (request.ShowSupplier) extraHeaders.Append("""<th class="supplier-col">Fornitore</th>""");
+        if (request.ShowManufacturer) extraHeaders.Append("""<th class="manufacturer-col">Produttore</th>""");
+        if (request.ShowClassification) extraHeaders.Append("""<th class="classification-col">Classificazione</th>""");
+        if (request.ShowHealthBars) extraHeaders.Append("""<th class="health-col">Salute</th>""");
+
+        var options = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(queryMode))
+        {
+            var period = Math.Clamp(request.PeriodMonths ?? 12, 1, 120);
+            var queryLabel = queryMode switch
+            {
+                "never-sold" => "mai venduti",
+                "top-sold" => $"più venduti ultimi {period} mesi",
+                "stopped" => $"fermi da almeno {period} mesi",
+                "dead-capital" => "capitale fermo",
+                _ => queryMode
+            };
+            options.Add(queryLabel);
+        }
+
+        if (request.ShowHealthBars) options.Add("salute");
+        if (request.ShowLastSale) options.Add("ultima vendita");
+        if (request.ShowSupplier) options.Add("fornitore");
+        if (request.ShowManufacturer) options.Add("produttore");
+        if (request.ShowClassification) options.Add("classificazione");
+
+        var optionsText = options.Count == 0 ? "report essenziale" : string.Join(", ", options);
         var pageHtml = new System.Text.StringBuilder();
 
         for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
@@ -1595,51 +1762,81 @@ app.MapPost("/api/inventory-analysis/report", async (
                 Environment.NewLine,
                 pageItems.Select(x =>
                 {
-                    var value = valuation == "fifo"
-                        ? x.FifoValue
-                        : x.PurchaseListValue;
+                    var rowTotal = valuation == "fifo" ? x.FifoValue : x.PurchaseListValue;
+                    var unitCost = x.Quantity == 0m ? 0m : rowTotal / x.Quantity;
+                    var extras = new System.Text.StringBuilder();
+
+                    if (request.ShowLastSale)
+                        extras.Append($"""<td class="date-col">{D(x.LastSaleDate)}</td>""");
+
+                    if (request.ShowSupplier)
+                        extras.Append($"""<td class="supplier-col">{H(Clip(x.Supplier, 28))}</td>""");
+
+                    if (request.ShowManufacturer)
+                        extras.Append($"""<td class="manufacturer-col">{H(Clip(x.Manufacturer, 22))}</td>""");
+
+                    if (request.ShowClassification)
+                        extras.Append($"""<td class="classification-col">{H(Clip(Classification(x), 34))}</td>""");
+
+                    if (request.ShowHealthBars)
+                        extras.Append($"""<td class="health-col">{HealthCell(x.CommercialScore, x.EconomicScore)}</td>""");
 
                     return $"""
 <tr>
-  <td>{H(x.ArticleCode)}</td>
-  <td>{H(x.Description)}</td>
-  <td class="num">{Q(x.Quantity)}</td>
-  <td class="num">{N(value)} €</td>
+  <td class="code-col">{H(x.ArticleCode)}</td>
+  <td class="description-col">{H(Clip(x.Description, extendedReport ? 44 : 80))}</td>
+  <td class="num qty-col">{Q(x.Quantity)}</td>
+  <td class="num cost-col">{N(unitCost)} €</td>
+  <td class="num total-col">{N(rowTotal)} €</td>
+  {extras}
 </tr>
 """;
                 }));
+
+            var grandTotal = pageIndex == pageCount - 1
+                ? $"""
+<div class="grand-total">
+  <span>TOTALE VALORIZZAZIONE MAGAZZINO</span>
+  <strong>{N(totalValue)} €</strong>
+</div>
+"""
+                : "";
 
             pageHtml.Append(
                 $$"""
 <section class="report-page">
   <div class="page-header">
-    <h1>{{H(title)}} — {{valuationTitle}}</h1>
+    <h1>{{H(title)}}</h1>
+    <div class="report-subtitle">Giacenze al {{stockDate:dd/MM/yyyy}}</div>
+    <div class="valuation-line">Valorizzazione: <strong>{{valuationTitle}}</strong></div>
     <div class="meta">
-      {{items.Count}} articoli · Quantità {{Q(totalQuantity)}} · Totale {{N(totalValue)}} € ·
-      Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
+      {{items.Count}} articoli · Giacenza {{Q(totalQuantity)}} · Totale {{N(totalValue)}} € ·
+      {{H(optionsText)}} · Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
     </div>
   </div>
 
   <table>
     <thead>
       <tr>
-        <th>Codice</th>
-        <th>Descrizione</th>
-        <th class="num">Q.tà</th>
-        <th class="num">{{valuationTitle}}</th>
+        <th class="code-col">Codice</th>
+        <th class="description-col">Descrizione</th>
+        <th class="num qty-col">Giacenza</th>
+        <th class="num cost-col">Costo</th>
+        <th class="num total-col">Totale</th>
+        {{extraHeaders}}
       </tr>
     </thead>
-    <tbody>
-      {{rows}}
-    </tbody>
+    <tbody>{{rows}}</tbody>
   </table>
 
-  <div class="page-footer">
-    Pag. {{pageIndex + 1}} di {{pageCount}}
-  </div>
+  {{grandTotal}}
+
+  <div class="page-footer">Pagina {{pageIndex + 1}} di {{pageCount}}</div>
 </section>
 """);
         }
+
+        var pageMode = extendedReport ? "A4 landscape" : "A4 portrait";
 
         var html = $$"""
 <!doctype html>
@@ -1648,48 +1845,137 @@ app.MapPost("/api/inventory-analysis/report", async (
 <meta charset="utf-8">
 <title>{{H(title)}} - {{valuationTitle}}</title>
 <style>
-@page { size: A4 portrait; margin: 7mm 8mm 8mm 8mm; }
+@page { size: {{pageMode}}; margin: 7mm 8mm 8mm 8mm; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
-body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 8.5pt; }
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  color: #111;
+  font-size: {{(extendedReport ? "7.2pt" : "8.3pt")}};
+}
 
 .report-page {
-  min-height: 279mm;
+  min-height: {{(extendedReport ? "192mm" : "279mm")}};
   position: relative;
   page-break-after: always;
   break-after: page;
-  padding-bottom: 8mm;
+  padding-bottom: 9mm;
 }
-.report-page:last-child {
-  page-break-after: auto;
-  break-after: auto;
-}
+.report-page:last-child { page-break-after: auto; break-after: auto; }
 
-.page-header { margin-bottom: 2mm; }
-h1 { font-size: 13pt; margin: 0 0 1.5mm 0; }
-.meta { font-size: 8pt; margin-bottom: 2mm; }
+.page-header { margin-bottom: 1.3mm; }
+h1 { font-size: {{(extendedReport ? "12pt" : "14pt")}}; margin: 0 0 .8mm 0; }
+.report-subtitle { font-size: {{(extendedReport ? "8.5pt" : "10pt")}}; font-weight: bold; margin-bottom: .5mm; }
+.valuation-line { font-size: {{(extendedReport ? "8pt" : "9pt")}}; margin-bottom: 1mm; }
+.meta { font-size: {{(extendedReport ? "6.6pt" : "7.5pt")}}; border-top: .4px solid #aaa; padding-top: .6mm; }
 
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 thead { display: table-header-group; }
+
 th {
   text-align: left;
+  border-top: 1px solid #000;
   border-bottom: 1.1px solid #000;
-  padding: .8mm .8mm;
-  font-size: 7.8pt;
+  padding: {{(extendedReport ? ".55mm .45mm" : ".8mm .7mm")}};
+  font-size: {{(extendedReport ? "6.5pt" : "7.6pt")}};
 }
+
 td {
   border-bottom: .3px solid #bbb;
-  padding: .65mm .8mm;
-  vertical-align: top;
-  overflow-wrap: anywhere;
-  line-height: 1.15;
+  padding: {{(extendedReport ? ".32mm .45mm" : ".45mm .7mm")}};
+  vertical-align: middle;
+  line-height: 1.0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-th:nth-child(1), td:nth-child(1) { width: 24%; }
-th:nth-child(2), td:nth-child(2) { width: 52%; }
-th:nth-child(3), td:nth-child(3) { width: 10%; }
-th:nth-child(4), td:nth-child(4) { width: 14%; }
 
-.num { text-align: right; white-space: nowrap; }
+.num { text-align: right; }
+.total-col { font-weight: bold; }
+
+.code-col { width: {{(extendedReport ? "11%" : "19%")}}; }
+.description-col { width: {{(extendedReport ? "24%" : "43%")}}; }
+.qty-col { width: {{(extendedReport ? "7%" : "11%")}}; }
+.cost-col { width: {{(extendedReport ? "8%" : "12%")}}; }
+.total-col { width: {{(extendedReport ? "9%" : "15%")}}; }
+.date-col { width: 8%; }
+.supplier-col { width: 13%; }
+.manufacturer-col { width: 10%; }
+.classification-col { width: 16%; }
+.health-col { width: 14%; }
+
+.health-cell {
+  width: 100%;
+}
+
+.health-one-line {
+  display: flex;
+  align-items: center;
+  gap: .45mm;
+  height: 2mm;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.health-code {
+  width: 2.2mm;
+  font-size: 5.6pt;
+  font-weight: bold;
+}
+
+.health-code-e {
+  margin-left: .7mm;
+}
+
+.health-track {
+  position: relative;
+  display: inline-block;
+  width: 14mm;
+  height: 1.35mm;
+  border-radius: .7mm;
+  background:
+    linear-gradient(
+      to right,
+      #10a64a 0%,
+      #8bc34a 18%,
+      #f2d235 34%,
+      #e99b24 50%,
+      #e76522 64%,
+      #c9252d 77%,
+      #6d244d 89%,
+      #111 100%
+    );
+}
+
+.health-marker {
+  position: absolute;
+  top: -.3mm;
+  width: .42mm;
+  height: 1.95mm;
+  background: #fff;
+  border: .16mm solid #000;
+  transform: translateX(-50%);
+}
+
+.health-score {
+  width: 4mm;
+  text-align: right;
+  font-size: 5.6pt;
+  font-weight: bold;
+}
+
+.grand-total {
+  margin-top: 2mm;
+  padding: 1.5mm 1mm;
+  border-top: 1.2px solid #000;
+  border-bottom: 1.2px solid #000;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9pt;
+}
+.grand-total strong { font-size: 10pt; }
 
 .page-footer {
   position: absolute;
@@ -1697,18 +1983,72 @@ th:nth-child(4), td:nth-child(4) { width: 14%; }
   right: 0;
   bottom: 0;
   text-align: center;
-  font-size: 8pt;
+  font-size: 7.5pt;
   font-weight: bold;
   border-top: .4px solid #aaa;
-  padding-top: 1.5mm;
+  padding-top: 1.2mm;
+}
+
+/* Compattazione mirata solo al report esteso/orizzontale. */
+body.extended {
+  font-size: 6.9pt;
+}
+
+body.extended .report-page {
+  min-height: 186mm;
+  padding-bottom: 6mm;
+}
+
+body.extended .page-header {
+  margin-bottom: .7mm;
+}
+
+body.extended h1 {
+  margin-bottom: .35mm;
+}
+
+body.extended .report-subtitle {
+  margin-bottom: .25mm;
+}
+
+body.extended .valuation-line {
+  margin-bottom: .45mm;
+}
+
+body.extended .meta {
+  padding-top: .3mm;
+}
+
+body.extended th {
+  padding: .35mm .40mm;
+}
+
+body.extended td {
+  padding: .16mm .40mm;
+}
+
+body.extended .health-one-line {
+  height: 1.55mm;
+}
+
+body.extended .health-track {
+  height: 1.15mm;
+}
+
+body.extended .health-marker {
+  top: -.25mm;
+  height: 1.65mm;
 }
 
 @media print {
-  .report-page { page-break-inside: avoid; break-inside: avoid-page; }
+  tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
 }
 </style>
 </head>
-<body>
+<body class="{{(extendedReport ? "extended" : "essential")}}">
 {{pageHtml}}
 </body>
 </html>
@@ -1724,7 +2064,6 @@ th:nth-child(4), td:nth-child(4) { width: 14%; }
             statusCode: 500);
     }
 });
-
 
 app.MapGet("/api/inventory-analysis/classifications", async (
     string dimension,
