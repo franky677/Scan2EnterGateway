@@ -28,6 +28,7 @@ builder.Services.AddSingleton<ColloRepository>();
 builder.Services.AddSingleton<FavoriteRepository>();
 builder.Services.AddSingleton<SalesRepository>();
 builder.Services.AddSingleton<InventoryAnalysisRepository>();
+builder.Services.AddSingleton<ProductExpiryRepository>();
 builder.Services.AddSingleton<LabelBitmapRenderer>();
 builder.Services.AddSingleton<WindowsLabelPrinter>();
 builder.Services.AddSingleton<GodexLabelPrinter>();
@@ -99,6 +100,8 @@ app.MapGet("/", () => Results.Ok(new
         "/api/reorder-list",
         "/api/product/{barcode}",
         "/api/product/{barcode}/health",
+        "/api/product/{articleId}/expiry",
+        "/api/product-expiry/alerts?months=3",
         "/api/product/{articleId}/price-lists",
         "PUT /api/product/{articleId}/price-lists/{priceListId}",
         "/api/search",
@@ -705,6 +708,145 @@ app.MapPost("/api/session/colli", async (
     }
 });
 
+
+
+// SCADENZE PRODOTTI SCAN2ENTER.
+// Dato proprietario Scan2Enter, separato dalle tabelle funzionali di Due Retail.
+app.MapGet("/api/product/{articleId:long}/expiry", async (
+    long articleId,
+    ProductExpiryRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new { message = "Id articolo non valido." });
+        }
+
+        var expiry = await repository.GetAsync(articleId, ct);
+
+        if (expiry is null)
+        {
+            return Results.NotFound(new
+            {
+                articleId,
+                hasExpiry = false,
+                message = "Nessuna scadenza registrata."
+            });
+        }
+
+        return Results.Ok(expiry);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura scadenza articolo",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPut("/api/product/{articleId:long}/expiry", async (
+    long articleId,
+    ProductExpiryUpdateRequest request,
+    ProductExpiryRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new { message = "Id articolo non valido." });
+        }
+
+        if (request.Month is < 1 or > 12)
+        {
+            return Results.BadRequest(new { message = "Il mese deve essere compreso tra 1 e 12." });
+        }
+
+        if (request.Year is < 2000 or > 2200)
+        {
+            return Results.BadRequest(new { message = "Anno scadenza non valido." });
+        }
+
+        var result = await repository.UpsertAsync(
+            articleId,
+            request.Month,
+            request.Year,
+            ct);
+
+        if (result is null)
+        {
+            return Results.NotFound(new
+            {
+                articleId,
+                message = "Articolo Due Retail non trovato."
+            });
+        }
+
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore salvataggio scadenza articolo",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapDelete("/api/product/{articleId:long}/expiry", async (
+    long articleId,
+    ProductExpiryRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new { message = "Id articolo non valido." });
+        }
+
+        var removed = await repository.DeleteAsync(articleId, ct);
+
+        return Results.Ok(new
+        {
+            articleId,
+            removed
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore rimozione scadenza articolo",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/product-expiry/alerts", async (
+    int? months,
+    ProductExpiryRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var selectedMonths = Math.Clamp(months ?? 3, 0, 24);
+        var result = await repository.GetAlertsAsync(selectedMonths, ct);
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura prodotti in scadenza",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
 
 
 app.MapGet("/api/favorites", async (
