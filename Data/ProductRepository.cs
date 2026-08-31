@@ -90,7 +90,11 @@ public sealed class ProductRepository
             OUTER APPLY
             (
                 SELECT TOP (1)
-                    p.Imponibile
+                    CASE
+                        WHEN ISNULL(a.CoeffConversione, 0) > 0
+                        THEN p.Imponibile / NULLIF(a.CoeffConversione, 0)
+                        ELSE p.Imponibile
+                    END AS Imponibile
                 FROM dbo.TabPrezziAcquisto AS p
                 WHERE p.idFornitore = af.IdFornitore
                   AND LTRIM(RTRIM(p.CodiceArticoloFornitore)) =
@@ -168,7 +172,12 @@ public sealed class ProductRepository
             FROM dbo.tabPrezziVendita AS pv
             INNER JOIN dbo.TabTipoListini AS tl ON tl.IdListino = pv.IdListino
             OUTER APPLY (
-                SELECT TOP (1) p.Imponibile
+                SELECT TOP (1)
+                    CASE
+                        WHEN ISNULL(a.CoeffConversione, 0) > 0
+                        THEN p.Imponibile / NULLIF(a.CoeffConversione, 0)
+                        ELSE p.Imponibile
+                    END AS Imponibile
                 FROM dbo.TabArticoliFornitori AS af
                 INNER JOIN dbo.TabPrezziAcquisto AS p
                     ON p.idFornitore = af.IdFornitore
@@ -176,6 +185,8 @@ public sealed class ProductRepository
                    AND ISNULL(p.idVariante1, -1) = -1
                    AND ISNULL(p.idVariante2, -1) = -1
                    AND ISNULL(p.idVariante3, -1) = -1
+                INNER JOIN dbo.tabArticoli AS a
+                    ON a.idArticolo = af.IdArticolo
                 WHERE af.IdArticolo = pv.IdArticolo
                   AND af.Predefinito = 1
                 ORDER BY p.dataAgg DESC
