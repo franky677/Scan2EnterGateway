@@ -27,9 +27,34 @@ public sealed class ReorderRepository
         return Convert.ToString(value) ?? "";
     }
 
+    private static async Task EnsureSupplierSelectionTableAsync(
+        SqlConnection connection,
+        CancellationToken ct)
+    {
+        const string sql = """
+IF OBJECT_ID('dbo.Scan2EnterReorderSupplier', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Scan2EnterReorderSupplier
+    (
+        IdArticolo int NOT NULL,
+        IdMagazzino int NOT NULL,
+        IdFornitoreScelto int NOT NULL,
+        DataAgg datetime NOT NULL DEFAULT GETDATE(),
+        CONSTRAINT PK_Scan2EnterReorderSupplier
+            PRIMARY KEY (IdArticolo, IdMagazzino)
+    );
+END;
+""";
+
+        await using var command = new SqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<IReadOnlyList<ReorderArticle>> GetReorderListAsync(
         CancellationToken ct)
     {
+        const int warehouseId = 0;
+
         const string sql = """
 SELECT
     a.idArticolo,
@@ -45,29 +70,55 @@ SELECT
     s.ScortaMassima,
     s.LottoRiordino,
     s.NonOrdinabileAFornitore,
-    af.IdFornitore,
-    af.CodiceArticoloFornitore,
-    f.Fornitore AS SupplierName,
+
+    COALESCE(afSelected.IdFornitore, afDefault.IdFornitore) AS IdFornitore,
+    COALESCE(
+        afSelected.CodiceArticoloFornitore,
+        afDefault.CodiceArticoloFornitore
+    ) AS CodiceArticoloFornitore,
+
+    COALESCE(fSelected.Fornitore, fDefault.Fornitore, '') AS SupplierName,
+
     pa.Imponibile AS PurchaseTaxable,
     pa.PrezzoAcquisto AS PurchasePrice,
     pa.aIva AS VatRate
+
 FROM dbo.tabArticoli AS a
 INNER JOIN dbo.TabScortaArticoliView AS s
     ON s.idArticolo = a.idArticolo
 INNER JOIN dbo.tabGiacenze AS g
     ON g.idArticolo = a.idArticolo
    AND g.idMagazzino = s.idMagazzino
-LEFT JOIN dbo.TabArticoliFornitori AS af
-    ON af.IdArticolo = a.idArticolo
-   AND af.Predefinito = 1
-LEFT JOIN dbo.ListaFornitori AS f
-    ON f.ID = af.IdFornitore
+
+LEFT JOIN dbo.Scan2EnterReorderSupplier AS sel
+    ON sel.IdArticolo = a.idArticolo
+   AND sel.IdMagazzino = s.idMagazzino
+
+LEFT JOIN dbo.TabArticoliFornitori AS afSelected
+    ON afSelected.IdArticolo = a.idArticolo
+   AND afSelected.IdFornitore = sel.IdFornitoreScelto
+
+LEFT JOIN dbo.TabArticoliFornitori AS afDefault
+    ON afDefault.IdArticolo = a.idArticolo
+   AND afDefault.Predefinito = 1
+
+LEFT JOIN dbo.ListaFornitori AS fSelected
+    ON fSelected.ID = afSelected.IdFornitore
+LEFT JOIN dbo.ListaFornitori AS fDefault
+    ON fDefault.ID = afDefault.IdFornitore
+
 LEFT JOIN dbo.TabPrezziAcquisto AS pa
-    ON pa.idFornitore = af.IdFornitore
-   AND pa.CodiceArticoloFornitore = af.CodiceArticoloFornitore
+    ON pa.idFornitore =
+        COALESCE(afSelected.IdFornitore, afDefault.IdFornitore)
+   AND pa.CodiceArticoloFornitore =
+        COALESCE(
+            afSelected.CodiceArticoloFornitore,
+            afDefault.CodiceArticoloFornitore
+        )
    AND ISNULL(pa.idVariante1, -1) = -1
    AND ISNULL(pa.idVariante2, -1) = -1
    AND ISNULL(pa.idVariante3, -1) = -1
+
 OUTER APPLY
 (
     SELECT TOP (1) tb.Barcode
@@ -76,11 +127,9 @@ OUTER APPLY
       AND NULLIF(LTRIM(RTRIM(tb.Barcode)), '') IS NOT NULL
     ORDER BY tb.Barcode
 ) AS b
-WHERE
-    s.idMagazzino = @warehouseId
-ORDER BY
-    a.Descrizione,
-    a.CodiceArticolo;
+
+WHERE s.idMagazzino = @warehouseId
+ORDER BY a.Descrizione, a.CodiceArticolo;
 """;
 
         var items = new List<ReorderArticle>();
@@ -88,8 +137,10 @@ ORDER BY
         await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(ct);
 
+        await EnsureSupplierSelectionTableAsync(connection, ct);
+
         await using var command = new SqlCommand(sql, connection);
-        command.Parameters.AddWithValue("@warehouseId", 0);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
         command.CommandTimeout = 60;
 
         await using var reader = await command.ExecuteReaderAsync(ct);
@@ -143,12 +194,220 @@ ORDER BY
                 MinimumStock = minimumStock,
                 MaximumStock = maximumStock,
                 ReorderLot = reorderLot,
-                NotOrderableFromSupplier = Flag(reader, "NonOrdinabileAFornitore"),
+                NotOrderableFromSupplier =
+                    Flag(reader, "NonOrdinabileAFornitore"),
                 SuggestedQuantity = suggestedQuantity
             });
         }
 
+        await reader.DisposeAsync();
+
         return items;
+    }
+
+    public async Task<IReadOnlyList<ReorderSupplierOption>> GetReorderSuppliersAsync(
+        int articleId,
+        int warehouseId,
+        CancellationToken ct)
+    {
+        const string sql = """
+SELECT
+    af.IdFornitore,
+    f.Fornitore AS SupplierName,
+    af.CodiceArticoloFornitore,
+    af.Predefinito,
+    CASE
+        WHEN sel.IdFornitoreScelto = af.IdFornitore THEN 1
+        ELSE 0
+    END AS Selected,
+    pa.Imponibile,
+    pa.Sconto1,
+    pa.Sconto2,
+    pa.Sconto3,
+    pa.Sconto4,
+    pa.PrezzoAcquisto,
+    pa.aIva,
+    pa.dataAgg
+FROM dbo.TabArticoliFornitori AS af
+LEFT JOIN dbo.ListaFornitori AS f
+    ON f.ID = af.IdFornitore
+LEFT JOIN dbo.Scan2EnterReorderSupplier AS sel
+    ON sel.IdArticolo = af.IdArticolo
+   AND sel.IdMagazzino = @warehouseId
+LEFT JOIN dbo.TabPrezziAcquisto AS pa
+    ON pa.idFornitore = af.IdFornitore
+   AND pa.CodiceArticoloFornitore = af.CodiceArticoloFornitore
+   AND ISNULL(pa.idVariante1, -1) = -1
+   AND ISNULL(pa.idVariante2, -1) = -1
+   AND ISNULL(pa.idVariante3, -1) = -1
+WHERE af.IdArticolo = @articleId
+ORDER BY
+    CASE WHEN sel.IdFornitoreScelto = af.IdFornitore THEN 0 ELSE 1 END,
+    af.Predefinito DESC,
+    f.Fornitore,
+    af.IdFornitore;
+""";
+
+        var result = new List<ReorderSupplierOption>();
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+        await EnsureSupplierSelectionTableAsync(connection, ct);
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+
+        while (await reader.ReadAsync(ct))
+        {
+            var taxable = Number(reader, "Imponibile");
+            var net = taxable;
+
+            if (net is not null)
+            {
+                foreach (var field in new[] { "Sconto1", "Sconto2", "Sconto3", "Sconto4" })
+                {
+                    var discount = Number(reader, field) ?? 0m;
+                    if (discount != 0m)
+                    {
+                        net *= 1m - (discount / 100m);
+                    }
+                }
+            }
+
+            result.Add(new ReorderSupplierOption
+            {
+                SupplierId = Integer64(reader, "IdFornitore"),
+                SupplierName = Text(reader, "SupplierName") ?? "",
+                SupplierArticleCode =
+                    Text(reader, "CodiceArticoloFornitore") ?? "",
+                IsDefault = Flag(reader, "Predefinito") == true,
+                IsSelected = Flag(reader, "Selected") == true,
+                PurchaseTaxable = taxable,
+                NetPurchaseTaxable = net,
+                PurchasePrice = Number(reader, "PrezzoAcquisto"),
+                VatRate = Number(reader, "aIva"),
+                UpdatedAt =
+                    reader.IsDBNull(reader.GetOrdinal("dataAgg"))
+                        ? null
+                        : reader.GetDateTime(reader.GetOrdinal("dataAgg"))
+            });
+        }
+
+        if (!result.Any(x => x.IsSelected))
+        {
+            var defaultIndex = result.FindIndex(x => x.IsDefault);
+            if (defaultIndex >= 0)
+            {
+                result[defaultIndex] =
+                    result[defaultIndex] with { IsSelected = true };
+            }
+        }
+
+        return result;
+    }
+
+    public async Task SetReorderSupplierAsync(
+        int articleId,
+        int warehouseId,
+        int supplierId,
+        CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+        await EnsureSupplierSelectionTableAsync(connection, ct);
+
+        const string validateSql = """
+SELECT COUNT(*)
+FROM dbo.TabArticoliFornitori
+WHERE IdArticolo = @articleId
+  AND IdFornitore = @supplierId;
+""";
+
+        await using (var validate =
+                     new SqlCommand(validateSql, connection))
+        {
+            validate.Parameters.AddWithValue("@articleId", articleId);
+            validate.Parameters.AddWithValue("@supplierId", supplierId);
+
+            var count = Convert.ToInt32(
+                await validate.ExecuteScalarAsync(ct));
+
+            if (count <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"Il fornitore {supplierId} non è associato " +
+                    $"all'articolo {articleId}.");
+            }
+        }
+
+        const string upsertSql = """
+IF EXISTS
+(
+    SELECT 1
+    FROM dbo.Scan2EnterReorderSupplier
+    WHERE IdArticolo = @articleId
+      AND IdMagazzino = @warehouseId
+)
+BEGIN
+    UPDATE dbo.Scan2EnterReorderSupplier
+    SET
+        IdFornitoreScelto = @supplierId,
+        DataAgg = GETDATE()
+    WHERE IdArticolo = @articleId
+      AND IdMagazzino = @warehouseId;
+END
+ELSE
+BEGIN
+    INSERT INTO dbo.Scan2EnterReorderSupplier
+    (
+        IdArticolo,
+        IdMagazzino,
+        IdFornitoreScelto,
+        DataAgg
+    )
+    VALUES
+    (
+        @articleId,
+        @warehouseId,
+        @supplierId,
+        GETDATE()
+    );
+END;
+""";
+
+        await using var command =
+            new SqlCommand(upsertSql, connection);
+
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
+        command.Parameters.AddWithValue("@supplierId", supplierId);
+
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task ClearReorderSupplierAsync(
+        int articleId,
+        int warehouseId,
+        CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+        await EnsureSupplierSelectionTableAsync(connection, ct);
+
+        const string sql = """
+DELETE FROM dbo.Scan2EnterReorderSupplier
+WHERE IdArticolo = @articleId
+  AND IdMagazzino = @warehouseId;
+""";
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
+
+        await command.ExecuteNonQueryAsync(ct);
     }
 
 
@@ -256,6 +515,92 @@ END;
             {
                 throw new InvalidOperationException(
                     $"Nessun record aggiornato per l'articolo {articleId}.");
+            }
+
+            /*
+             * La scelta fornitore vale per il ciclo di riordino corrente.
+             * La azzeriamo solo quando una modifica di scorta rende davvero
+             * l'articolo non più da riordinare.
+             */
+            const string reorderStateSql = """
+SELECT
+    g.Giacenza,
+    g.Disponibile,
+    s.ScortaMinima,
+    s.ScortaMassima,
+    s.LottoRiordino
+FROM dbo.TabScortaArticoliView AS s
+INNER JOIN dbo.tabGiacenze AS g
+    ON g.idArticolo = s.idArticolo
+   AND g.idMagazzino = s.idMagazzino
+WHERE s.idArticolo = @articleId
+  AND s.idMagazzino = @warehouseId;
+""";
+
+            await using var stateCommand =
+                new SqlCommand(
+                    reorderStateSql,
+                    connection,
+                    (SqlTransaction)transaction);
+
+            stateCommand.Parameters.AddWithValue(
+                "@articleId",
+                articleId);
+
+            stateCommand.Parameters.AddWithValue(
+                "@warehouseId",
+                warehouseId);
+
+            await using var stateReader =
+                await stateCommand.ExecuteReaderAsync(ct);
+
+            var stillNeedsReorder = false;
+
+            if (await stateReader.ReadAsync(ct))
+            {
+                var stock = Number(stateReader, "Giacenza");
+                var available = Number(stateReader, "Disponibile");
+                var min = NormalizeQuantity(
+                    Number(stateReader, "ScortaMinima"));
+                var max = NormalizeQuantity(
+                    Number(stateReader, "ScortaMassima"));
+                var lot = NormalizeQuantity(
+                    Number(stateReader, "LottoRiordino"));
+
+                stillNeedsReorder =
+                    NeedsReorder(
+                        stock,
+                        available,
+                        min,
+                        max,
+                        lot);
+            }
+
+            await stateReader.DisposeAsync();
+
+            if (!stillNeedsReorder)
+            {
+                const string clearSupplierSql = """
+DELETE FROM dbo.Scan2EnterReorderSupplier
+WHERE IdArticolo = @articleId
+  AND IdMagazzino = @warehouseId;
+""";
+
+                await using var clearSupplier =
+                    new SqlCommand(
+                        clearSupplierSql,
+                        connection,
+                        (SqlTransaction)transaction);
+
+                clearSupplier.Parameters.AddWithValue(
+                    "@articleId",
+                    articleId);
+
+                clearSupplier.Parameters.AddWithValue(
+                    "@warehouseId",
+                    warehouseId);
+
+                await clearSupplier.ExecuteNonQueryAsync(ct);
             }
 
             await transaction.CommitAsync(ct);

@@ -238,6 +238,116 @@ app.MapGet("/api/reorder-list", async (
     }
 });
 
+
+app.MapGet("/api/reorder-list/{articleId:int}/suppliers", async (
+    int articleId,
+    int? warehouseId,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var wh = warehouseId ?? 0;
+        var items = await repository.GetReorderSuppliersAsync(
+            articleId, wh, ct);
+
+        return Results.Ok(new
+        {
+            articleId,
+            warehouseId = wh,
+            count = items.Count,
+            items
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura fornitori alternativi riordino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapPut("/api/reorder-list/{articleId:int}/supplier", async (
+    int articleId,
+    SetReorderSupplierRequest request,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (request.SupplierId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                updated = false,
+                message = "Fornitore non valido."
+            });
+        }
+
+        await repository.SetReorderSupplierAsync(
+            articleId,
+            request.WarehouseId,
+            request.SupplierId,
+            ct);
+
+        return Results.Ok(new
+        {
+            updated = true,
+            articleId,
+            warehouseId = request.WarehouseId,
+            supplierId = request.SupplierId
+        });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new
+        {
+            updated = false,
+            message = ex.Message
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore selezione fornitore riordino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapDelete("/api/reorder-list/{articleId:int}/supplier", async (
+    int articleId,
+    int? warehouseId,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var wh = warehouseId ?? 0;
+
+        await repository.ClearReorderSupplierAsync(
+            articleId,
+            wh,
+            ct);
+
+        return Results.Ok(new
+        {
+            removed = true,
+            articleId,
+            warehouseId = wh
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore reset fornitore riordino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
 app.MapGet("/api/public/product/{barcode}", async (
     string barcode,
     ProductRepository repository,
