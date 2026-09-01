@@ -71,13 +71,9 @@ SELECT
     s.LottoRiordino,
     s.NonOrdinabileAFornitore,
 
-    COALESCE(afSelected.IdFornitore, afDefault.IdFornitore) AS IdFornitore,
-    COALESCE(
-        afSelected.CodiceArticoloFornitore,
-        afDefault.CodiceArticoloFornitore
-    ) AS CodiceArticoloFornitore,
-
-    COALESCE(fSelected.Fornitore, fDefault.Fornitore, '') AS SupplierName,
+    af.IdFornitore AS IdFornitore,
+    af.CodiceArticoloFornitore AS CodiceArticoloFornitore,
+    COALESCE(f.Fornitore, '') AS SupplierName,
 
     pa.Imponibile AS PurchaseTaxable,
     pa.PrezzoAcquisto AS PurchasePrice,
@@ -90,31 +86,22 @@ INNER JOIN dbo.tabGiacenze AS g
     ON g.idArticolo = a.idArticolo
    AND g.idMagazzino = s.idMagazzino
 
-LEFT JOIN dbo.Scan2EnterReorderSupplier AS sel
-    ON sel.IdArticolo = a.idArticolo
-   AND sel.IdMagazzino = s.idMagazzino
+/*
+ * MULTI-FORNITORE:
+ * una stessa necessità di riordino viene esposta una volta per ogni
+ * fornitore associato all'articolo. Il fabbisogno resta dell'articolo:
+ * quando NeedsReorder() diventa false non viene restituita nessuna riga,
+ * quindi l'articolo scompare contemporaneamente da tutti i fornitori.
+ */
+LEFT JOIN dbo.TabArticoliFornitori AS af
+    ON af.IdArticolo = a.idArticolo
 
-LEFT JOIN dbo.TabArticoliFornitori AS afSelected
-    ON afSelected.IdArticolo = a.idArticolo
-   AND afSelected.IdFornitore = sel.IdFornitoreScelto
-
-LEFT JOIN dbo.TabArticoliFornitori AS afDefault
-    ON afDefault.IdArticolo = a.idArticolo
-   AND afDefault.Predefinito = 1
-
-LEFT JOIN dbo.ListaFornitori AS fSelected
-    ON fSelected.ID = afSelected.IdFornitore
-LEFT JOIN dbo.ListaFornitori AS fDefault
-    ON fDefault.ID = afDefault.IdFornitore
+LEFT JOIN dbo.ListaFornitori AS f
+    ON f.ID = af.IdFornitore
 
 LEFT JOIN dbo.TabPrezziAcquisto AS pa
-    ON pa.idFornitore =
-        COALESCE(afSelected.IdFornitore, afDefault.IdFornitore)
-   AND pa.CodiceArticoloFornitore =
-        COALESCE(
-            afSelected.CodiceArticoloFornitore,
-            afDefault.CodiceArticoloFornitore
-        )
+    ON pa.idFornitore = af.IdFornitore
+   AND pa.CodiceArticoloFornitore = af.CodiceArticoloFornitore
    AND ISNULL(pa.idVariante1, -1) = -1
    AND ISNULL(pa.idVariante2, -1) = -1
    AND ISNULL(pa.idVariante3, -1) = -1
@@ -129,7 +116,12 @@ OUTER APPLY
 ) AS b
 
 WHERE s.idMagazzino = @warehouseId
-ORDER BY a.Descrizione, a.CodiceArticolo;
+
+ORDER BY
+    COALESCE(f.Fornitore, ''),
+    a.Descrizione,
+    a.CodiceArticolo,
+    af.IdFornitore;
 """;
 
         var items = new List<ReorderArticle>();
