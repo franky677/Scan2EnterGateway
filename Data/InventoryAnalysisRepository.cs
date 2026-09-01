@@ -1406,11 +1406,11 @@ ORDER BY ValoreFIFO DESC, Descrizione, IdArticolo;
         var safePeriodMonths = Math.Clamp(periodMonths, 1, 120);
         var safeLimit = Math.Clamp(limit, 1, 50000);
 
-        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital" or "growing" or "declining" or "low-stock-fast-moving" or "overstock"))
+        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital" or "growing" or "declining" or "low-stock-fast-moving" or "overstock" or "expired" or "expiring"))
         {
             throw new ArgumentException(
                 "mode deve essere never-sold, top-sold, stopped, dead-capital, " +
-                "growing, declining, low-stock-fast-moving oppure overstock.");
+                "growing, declining, low-stock-fast-moving, overstock, expired oppure expiring.");
         }
 
         const string sql = """
@@ -1546,6 +1546,26 @@ SELECT
     ISNULL(v.Venduto12M, 0) AS Venduto12M,
     ISNULL(v.VendutoAnnoPrecedente, 0) AS VendutoAnnoPrecedente,
     ISNULL(v.MesiConVendite12M, 0) AS MesiConVendite12M,
+    e.MeseScadenza,
+    e.AnnoScadenza,
+    CASE
+        WHEN e.MeseScadenza BETWEEN 1 AND 12
+         AND e.AnnoScadenza BETWEEN 2000 AND 2200
+        THEN DATEADD(
+            DAY,
+            -1,
+            DATEADD(
+                MONTH,
+                1,
+                DATEADD(
+                    MONTH,
+                    e.MeseScadenza - 1,
+                    DATEADD(YEAR, e.AnnoScadenza - 1900, 0)
+                )
+            )
+        )
+        ELSE NULL
+    END AS DataScadenza,
     CASE
         WHEN v.DataUltimaVendita IS NULL THEN 1
         WHEN v.DataUltimaVendita < DATEADD(YEAR, -5, @DataAnalisi) THEN 2
@@ -1588,6 +1608,8 @@ LEFT JOIN #FIFO f
     ON f.IdArticolo = s.IdArticolo
 LEFT JOIN #Prezzi p
     ON p.IdArticolo = s.IdArticolo
+LEFT JOIN dbo.Scan2EnterProductExpiry e
+    ON e.IdArticolo = s.IdArticolo
 LEFT JOIN dbo.tabClienti cl
     ON cl.IdCliente = p.IdFornitore
 LEFT JOIN dbo.tabProduttori prod
@@ -1649,6 +1671,17 @@ SELECT TOP (@Limit)
     Venduto12M,
     VendutoAnnoPrecedente,
     MesiConVendite12M,
+    MeseScadenza,
+    AnnoScadenza,
+    DataScadenza,
+    CASE
+        WHEN DataScadenza IS NULL THEN NULL
+        ELSE DATEDIFF(
+            DAY,
+            DATEADD(DAY, DATEDIFF(DAY, 0, @DataAnalisi), 0),
+            DataScadenza
+        )
+    END AS GiorniAllaScadenza,
     CAST(
         CASE
             WHEN ISNULL(Venduto12M, 0) <= 0 THEN NULL
@@ -1707,6 +1740,31 @@ WHERE
         AND ISNULL(Venduto12M, 0) > 0
         AND Giacenza / NULLIF((Venduto12M / 12.0), 0) >= 24.0
     )
+    OR
+    (
+        @Mode = 'expired'
+        AND DataScadenza IS NOT NULL
+        AND DataScadenza < DATEADD(DAY, DATEDIFF(DAY, 0, @DataAnalisi), 0)
+    )
+    OR
+    (
+        @Mode = 'expiring'
+        AND DataScadenza IS NOT NULL
+        AND DataScadenza >= DATEADD(DAY, DATEDIFF(DAY, 0, @DataAnalisi), 0)
+        AND DataScadenza <= DATEADD(
+            DAY,
+            -1,
+            DATEADD(
+                MONTH,
+                DATEDIFF(
+                    MONTH,
+                    0,
+                    DATEADD(MONTH, 4, @DataAnalisi)
+                ),
+                0
+            )
+        )
+    )
 ORDER BY
     CASE WHEN @Mode = 'never-sold' THEN ValoreFIFO END DESC,
     CASE WHEN @Mode = 'top-sold' THEN VendutoPeriodo END DESC,
@@ -1740,6 +1798,9 @@ ORDER BY
     CASE WHEN @Mode = 'overstock' AND ISNULL(Venduto12M, 0) > 0
         THEN Giacenza / NULLIF((Venduto12M / 12.0), 0)
     END DESC,
+
+    CASE WHEN @Mode = 'expired' THEN DataScadenza END DESC,
+    CASE WHEN @Mode = 'expiring' THEN DataScadenza END ASC,
 
     ValoreFIFO DESC,
     Descrizione,
@@ -1779,6 +1840,18 @@ ORDER BY
             var lastSaleDate = reader["DataUltimaVendita"] == DBNull.Value
                 ? (DateTime?)null
                 : Convert.ToDateTime(reader["DataUltimaVendita"]);
+            var expiryDate = reader["DataScadenza"] == DBNull.Value
+                ? (DateTime?)null
+                : Convert.ToDateTime(reader["DataScadenza"]);
+            var expiryMonth = reader["MeseScadenza"] == DBNull.Value
+                ? (int?)null
+                : Convert.ToInt32(reader["MeseScadenza"]);
+            var expiryYear = reader["AnnoScadenza"] == DBNull.Value
+                ? (int?)null
+                : Convert.ToInt32(reader["AnnoScadenza"]);
+            var daysToExpiry = reader["GiorniAllaScadenza"] == DBNull.Value
+                ? (int?)null
+                : Convert.ToInt32(reader["GiorniAllaScadenza"]);
 
             var commercialScore = CalculateCommercialScore(
                 lastSaleDate,
@@ -1806,6 +1879,10 @@ ORDER BY
                 SoldHistorical = Number(reader, "VendutoStorico"),
                 TrendPercent = trendPercent,
                 MonthsCoverage = monthsCoverage,
+                ExpiryMonth = expiryMonth,
+                ExpiryYear = expiryYear,
+                ExpiryDate = expiryDate,
+                DaysToExpiry = daysToExpiry,
                 RotationId = rotationId,
                 Rotation = RotationName(rotationId),
                 SupplierId = reader["IdFornitore"] == DBNull.Value

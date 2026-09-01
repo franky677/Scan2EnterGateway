@@ -1695,13 +1695,13 @@ app.MapGet("/api/inventory-analysis/query", async (
     {
         var normalizedMode = (mode ?? "").Trim().ToLowerInvariant();
 
-        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital" or "growing" or "declining" or "low-stock-fast-moving" or "overstock"))
+        if (normalizedMode is not ("never-sold" or "top-sold" or "stopped" or "dead-capital" or "growing" or "declining" or "low-stock-fast-moving" or "overstock" or "expired" or "expiring"))
         {
             return Results.BadRequest(new
             {
                 message =
                     "mode deve essere never-sold, top-sold, stopped, dead-capital, " +
-                    "growing, declining, low-stock-fast-moving oppure overstock."
+                    "growing, declining, low-stock-fast-moving, overstock, expired oppure expiring."
             });
         }
 
@@ -1724,6 +1724,8 @@ app.MapGet("/api/inventory-analysis/query", async (
             "declining" => "IN CALO - 12 MESI VS 12 PRECEDENTI",
             "low-stock-fast-moving" => "ALTA ROTAZIONE / POCA GIACENZA",
             "overstock" => "SOVRASTOCK",
+            "expired" => "SCADUTI",
+            "expiring" => "IN SCADENZA ENTRO 3 MESI",
             _ => normalizedMode
         };
 

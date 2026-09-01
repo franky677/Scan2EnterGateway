@@ -46,6 +46,12 @@ public sealed class InventoryAnalysisItemDto
     public decimal? TrendPercent { get; set; }
     public decimal? MonthsCoverage { get; set; }
 
+    // Scadenza proprietaria Scan2Enter.
+    public int? ExpiryMonth { get; set; }
+    public int? ExpiryYear { get; set; }
+    public DateTime? ExpiryDate { get; set; }
+    public int? DaysToExpiry { get; set; }
+
     public int RotationId { get; set; }
     public string Rotation { get; set; } = "";
 
