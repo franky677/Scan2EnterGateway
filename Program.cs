@@ -1725,7 +1725,7 @@ app.MapGet("/api/inventory-analysis/query", async (
             "low-stock-fast-moving" => "ALTA ROTAZIONE / POCA GIACENZA",
             "overstock" => "SOVRASTOCK",
             "expired" => "SCADUTI",
-            "expiring" => "IN SCADENZA ENTRO 3 MESI",
+            "expiring" => $"IN SCADENZA ENTRO {selectedPeriodMonths} MESI",
             _ => normalizedMode
         };
 

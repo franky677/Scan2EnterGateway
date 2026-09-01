@@ -1759,7 +1759,7 @@ WHERE
                 DATEDIFF(
                     MONTH,
                     0,
-                    DATEADD(MONTH, 4, @DataAnalisi)
+                    DATEADD(MONTH, @PeriodMonths + 1, @DataAnalisi)
                 ),
                 0
             )
