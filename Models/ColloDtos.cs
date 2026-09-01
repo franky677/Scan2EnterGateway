@@ -8,7 +8,14 @@ public sealed record CreateColloRequest(
 public sealed record CreateColloItemRequest(
     string Barcode,
     decimal Quantity,
-    decimal Price);
+    decimal Price,
+    decimal? ListPrice = null,
+    decimal Discount1 = 0m,
+    decimal Discount2 = 0m,
+    decimal Discount3 = 0m,
+    decimal Discount4 = 0m,
+    decimal ManualDiscount = 0m,
+    int? PriceListId = null);
 
 public sealed class CreatedColloDto
 {

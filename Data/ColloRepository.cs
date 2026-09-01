@@ -81,34 +81,69 @@ public sealed class ColloRepository
                 }
 
                 var vatRate = article.Value.VatRate;
-                var lineTotal = decimal.Round(
-                    item.Price * item.Quantity,
+
+                var grossUnitPrice =
+                    item.ListPrice.HasValue && item.ListPrice.Value >= 0m
+                        ? item.ListPrice.Value
+                        : item.Price;
+
+                var discounts = NormalizeDiscounts(
+                    item.Discount1,
+                    item.Discount2,
+                    item.Discount3,
+                    item.Discount4,
+                    item.ManualDiscount);
+
+                var grossTotal = decimal.Round(
+                    grossUnitPrice * item.Quantity,
+                    2,
+                    MidpointRounding.AwayFromZero);
+
+                var netTotal = ApplyDiscounts(
+                    grossTotal,
+                    discounts);
+
+                var discountAmount = decimal.Round(
+                    grossTotal - netTotal,
                     2,
                     MidpointRounding.AwayFromZero);
 
                 var divisor = 1m + (vatRate / 100m);
 
-                var taxableTotal = decimal.Round(
-                    lineTotal / divisor,
+                var taxableTotal = divisor == 0m
+                    ? netTotal
+                    : decimal.Round(
+                        netTotal / divisor,
+                        2,
+                        MidpointRounding.AwayFromZero);
+
+                var vatTotal = decimal.Round(
+                    netTotal - taxableTotal,
                     2,
                     MidpointRounding.AwayFromZero);
 
-                var vatTotal = lineTotal - taxableTotal;
-
                 var netUnit = divisor == 0m
-                    ? item.Price
+                    ? grossUnitPrice
                     : decimal.Round(
-                        item.Price / divisor,
+                        grossUnitPrice / divisor,
                         4,
                         MidpointRounding.AwayFromZero);
 
                 preparedItems.Add(new PreparedItem(
+                    ArticleId: article.Value.ArticleId,
                     Barcode: item.Barcode.Trim(),
                     Description: article.Value.Description,
-                    Price: item.Price,
+                    PriceListId: item.PriceListId ?? -1,
+                    Price: grossUnitPrice,
                     Quantity: item.Quantity,
                     VatRate: vatRate,
-                    Total: lineTotal,
+                    Total: grossTotal,
+                    Discount1: discounts[0],
+                    Discount2: discounts[1],
+                    Discount3: discounts[2],
+                    Discount4: discounts[3],
+                    DiscountAmount: discountAmount,
+                    NetTotal: netTotal,
                     Taxable: taxableTotal,
                     Vat: vatTotal,
                     NetUnit: netUnit));
@@ -150,7 +185,7 @@ public sealed class ColloRepository
                 ClientName = client.Value.Name,
                 BarcodeCollo = BuildColloEan13(numeroCollo),
                 ItemCount = preparedItems.Count,
-                Total = preparedItems.Sum(x => x.Total),
+                Total = preparedItems.Sum(x => x.NetTotal),
                 CreatedAt = now
             };
         }
@@ -549,7 +584,7 @@ public sealed class ColloRepository
         );
     }
 
-    private static async Task<(string Description, decimal VatRate)?>
+    private static async Task<(long ArticleId, string Description, decimal VatRate)?>
         ReadArticleAsync(
             SqlConnection connection,
             SqlTransaction transaction,
@@ -558,6 +593,7 @@ public sealed class ColloRepository
     {
         const string sql = """
             SELECT TOP (1)
+                a.idArticolo,
                 a.Descrizione,
                 ISNULL(a.AliquotaIva, 0) AS AliquotaIva
             FROM dbo.tabBarcode AS b
@@ -583,11 +619,16 @@ public sealed class ColloRepository
         }
 
         return (
-            reader.IsDBNull(0) ? "" : reader.GetString(0).Trim(),
-            reader.IsDBNull(1)
+            reader.IsDBNull(0)
+                ? 0L
+                : Convert.ToInt64(
+                    reader.GetValue(0),
+                    CultureInfo.InvariantCulture),
+            reader.IsDBNull(1) ? "" : reader.GetString(1).Trim(),
+            reader.IsDBNull(2)
                 ? 0m
                 : Convert.ToDecimal(
-                    reader.GetValue(1),
+                    reader.GetValue(2),
                     CultureInfo.InvariantCulture)
         );
     }
@@ -728,6 +769,7 @@ public sealed class ColloRepository
             new SqlCommand(sql, connection, transaction);
 
         command.Parameters.Add("@idTestata", SqlDbType.Int).Value = testataId;
+
         command.Parameters.Add("@numeroCollo", SqlDbType.NVarChar, 100)
             .Value = numeroCollo.ToString(CultureInfo.InvariantCulture);
         command.Parameters.Add("@dataCreaz", SqlDbType.DateTime)
@@ -798,7 +840,7 @@ public sealed class ColloRepository
             (
                 @idDettaglio,
                 @idTestata,
-                -1,
+                @idListino,
                 0,
                 @barcode,
                 @descrizione,
@@ -806,19 +848,19 @@ public sealed class ColloRepository
                 @quantita,
                 @aiva,
                 @totale,
-                0,
-                0,
-                0,
-                0,
-                0,
-                @totale,
+                @sconto1,
+                @sconto2,
+                @sconto3,
+                @sconto4,
+                @importoSconto,
+                @totaleNettoSconto,
                 @imponibile,
                 @iva,
                 @codiceIva,
                 @dataAgg,
                 N'Scan2Enter',
                 @prezzoNettoIva,
-                0,
+                @idArticolo,
                 0,
                 0,
                 1,
@@ -833,6 +875,10 @@ public sealed class ColloRepository
 
         command.Parameters.Add("@idDettaglio", SqlDbType.Int).Value = detailId;
         command.Parameters.Add("@idTestata", SqlDbType.Int).Value = testataId;
+        command.Parameters.Add("@idListino", SqlDbType.Int)
+            .Value = item.PriceListId;
+        command.Parameters.Add("@idArticolo", SqlDbType.Int)
+            .Value = Convert.ToInt32(item.ArticleId);
         command.Parameters.Add("@barcode", SqlDbType.NVarChar, 60)
             .Value = item.Barcode;
         command.Parameters.Add("@descrizione", SqlDbType.NVarChar, 8000)
@@ -846,6 +892,18 @@ public sealed class ColloRepository
             .Value = Convert.ToDouble(item.VatRate);
         command.Parameters.Add("@totale", SqlDbType.Float)
             .Value = Convert.ToDouble(item.Total);
+        command.Parameters.Add("@sconto1", SqlDbType.Float)
+            .Value = Convert.ToDouble(item.Discount1);
+        command.Parameters.Add("@sconto2", SqlDbType.Float)
+            .Value = Convert.ToDouble(item.Discount2);
+        command.Parameters.Add("@sconto3", SqlDbType.Float)
+            .Value = Convert.ToDouble(item.Discount3);
+        command.Parameters.Add("@sconto4", SqlDbType.Float)
+            .Value = Convert.ToDouble(item.Discount4);
+        command.Parameters.Add("@importoSconto", SqlDbType.Float)
+            .Value = Convert.ToDouble(item.DiscountAmount);
+        command.Parameters.Add("@totaleNettoSconto", SqlDbType.Float)
+            .Value = Convert.ToDouble(item.NetTotal);
         command.Parameters.Add("@imponibile", SqlDbType.Float)
             .Value = Convert.ToDouble(item.Taxable);
         command.Parameters.Add("@iva", SqlDbType.Float)
@@ -863,6 +921,86 @@ public sealed class ColloRepository
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    private static decimal[] NormalizeDiscounts(
+        decimal discount1,
+        decimal discount2,
+        decimal discount3,
+        decimal discount4,
+        decimal manualDiscount)
+    {
+        var values = new[]
+        {
+            NormalizeDiscount(discount1),
+            NormalizeDiscount(discount2),
+            NormalizeDiscount(discount3),
+            NormalizeDiscount(discount4)
+        };
+
+        var manual = NormalizeDiscount(manualDiscount);
+
+        if (manual > 0m)
+        {
+            var inserted = false;
+
+            for (var i = 0; i < values.Length; i++)
+            {
+                if (values[i] == 0m)
+                {
+                    values[i] = manual;
+                    inserted = true;
+                    break;
+                }
+            }
+
+            if (!inserted)
+            {
+                throw new InvalidOperationException(
+                    "Impossibile applicare lo sconto manuale: " +
+                    "tutti e quattro gli sconti automatici sono già occupati.");
+            }
+        }
+
+        return values;
+    }
+
+    private static decimal NormalizeDiscount(decimal value)
+    {
+        if (value < 0m || value > 100m)
+        {
+            throw new InvalidOperationException(
+                $"Sconto non valido: {value.ToString(CultureInfo.InvariantCulture)}%. " +
+                "Valore ammesso da 0 a 100.");
+        }
+
+        return decimal.Round(
+            value,
+            4,
+            MidpointRounding.AwayFromZero);
+    }
+
+    private static decimal ApplyDiscounts(
+        decimal grossTotal,
+        IReadOnlyList<decimal> discounts)
+    {
+        var net = grossTotal;
+
+        foreach (var discount in discounts)
+        {
+            if (discount <= 0m)
+            {
+                continue;
+            }
+
+            net = decimal.Round(
+                net * (1m - (discount / 100m)),
+                2,
+                MidpointRounding.AwayFromZero);
+        }
+
+        return net;
+    }
+
 
     private static string BuildColloEan13(int numeroCollo)
     {
@@ -893,12 +1031,20 @@ public sealed class ColloRepository
     }
 
     private readonly record struct PreparedItem(
+        long ArticleId,
         string Barcode,
         string Description,
+        int PriceListId,
         decimal Price,
         decimal Quantity,
         decimal VatRate,
         decimal Total,
+        decimal Discount1,
+        decimal Discount2,
+        decimal Discount3,
+        decimal Discount4,
+        decimal DiscountAmount,
+        decimal NetTotal,
         decimal Taxable,
         decimal Vat,
         decimal NetUnit);
