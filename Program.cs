@@ -19,6 +19,8 @@ var logDirectory = Path.Combine(contentRoot, "Logs");
 
 builder.Services.AddSingleton<ReorderRepository>();
 builder.Services.AddSingleton<ProductRepository>();
+builder.Services.AddSingleton<ProductPromoRepository>();
+builder.Services.AddHostedService<ProductPromoValidityWorker>();
 builder.Services.AddSingleton<LocationRepository>();
 builder.Services.AddSingleton<ProductImageRepository>();
 builder.Services.AddSingleton<SessionRepository>();
@@ -104,6 +106,10 @@ app.MapGet("/", () => Results.Ok(new
         "/api/product-expiry/alerts?months=3",
         "/api/product/{articleId}/price-lists",
         "PUT /api/product/{articleId}/price-lists/{priceListId}",
+        "GET /api/product/{articleId}/promo-discount",
+        "PUT /api/product/{articleId}/promo-discount",
+        "DELETE /api/product/{articleId}/promo-discount",
+        "GET /api/promotions?status=&q=",
         "/api/search",
         "/api/session/history",
         "/api/session/customers",
@@ -547,6 +553,226 @@ app.MapPut(
         {
             return Results.Problem(
                 title: "Errore modifica prezzo listino",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+// ELENCO PROMOZIONI SCAN2ENTER.
+// status: ATTIVE, IN_CORSO, SENZA_SCADENZA, PROGRAMMATA, SCADUTA.
+// q: ricerca per id articolo, codice, descrizione o barcode.
+app.MapGet(
+    "/api/promotions",
+    async (
+        string? status,
+        string? q,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var normalizedStatus =
+                string.IsNullOrWhiteSpace(status)
+                    ? null
+                    : status.Trim().ToUpperInvariant();
+
+            var allowedStatuses = new[]
+            {
+                "ATTIVE",
+                "IN_CORSO",
+                "SENZA_SCADENZA",
+                "PROGRAMMATA",
+                "SCADUTA"
+            };
+
+            if (normalizedStatus is not null &&
+                !allowedStatuses.Contains(normalizedStatus))
+            {
+                return Results.BadRequest(new
+                {
+                    message =
+                        "Stato promo non valido. Usare ATTIVE, IN_CORSO, " +
+                        "SENZA_SCADENZA, PROGRAMMATA oppure SCADUTA."
+                });
+            }
+
+            var items =
+                await repository.GetListAsync(
+                    q,
+                    normalizedStatus,
+                    ct);
+
+            return Results.Ok(new
+            {
+                status = normalizedStatus,
+                query = (q ?? string.Empty).Trim(),
+                count = items.Count,
+                generatedAt = DateTimeOffset.Now,
+                items
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore lettura elenco promozioni Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+// PROMO / OFFERTE SCAN2ENTER.
+// La percentuale viene conservata da Scan2Enter; Due Retail riceve
+// un Taglio Prezzo già arrotondato commercialmente ai 10 centesimi.
+app.MapGet(
+    "/api/product/{articleId:long}/promo-discount",
+    async (
+        long articleId,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (articleId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    message = "Id articolo non valido."
+                });
+            }
+
+            var promo = await repository.GetAsync(articleId, ct);
+
+            if (promo is null)
+            {
+                return Results.NotFound(new
+                {
+                    articleId,
+                    message = "Nessuna offerta Scan2Enter attiva."
+                });
+            }
+
+            return Results.Ok(promo);
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore lettura offerta articolo",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapPut(
+    "/api/product/{articleId:long}/promo-discount",
+    async (
+        long articleId,
+        SetProductPromoDiscountWithValidityRequest request,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (articleId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    updated = false,
+                    message = "Id articolo non valido."
+                });
+            }
+
+            if (request.DiscountPercent < 0m || request.DiscountPercent > 100m)
+            {
+                return Results.BadRequest(new
+                {
+                    updated = false,
+                    message = "Lo sconto deve essere compreso tra 0 e 100."
+                });
+            }
+
+            if (request.ValidFrom.HasValue &&
+                request.ValidTo.HasValue &&
+                request.ValidTo.Value < request.ValidFrom.Value)
+            {
+                return Results.BadRequest(new
+                {
+                    updated = false,
+                    message = "La data di fine promo non può precedere la data di inizio."
+                });
+            }
+
+            if (request.DiscountPercent == 0m)
+            {
+                var removed = await repository.RemoveAsync(articleId, ct);
+
+                return Results.Ok(new
+                {
+                    updated = true,
+                    removed,
+                    articleId,
+                    discountPercent = 0m,
+                    frontendRefreshRequired = removed
+                });
+            }
+
+            var promo = await repository.SetDiscountAsync(
+                articleId,
+                request.DiscountPercent,
+                cancellationToken: ct,
+                validFrom: request.ValidFrom,
+                validTo: request.ValidTo);
+
+            return Results.Ok(new
+            {
+                updated = true,
+                promo,
+                frontendRefreshRequired = true
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore impostazione offerta articolo",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapDelete(
+    "/api/product/{articleId:long}/promo-discount",
+    async (
+        long articleId,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (articleId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    removed = false,
+                    message = "Id articolo non valido."
+                });
+            }
+
+            var removed = await repository.RemoveAsync(articleId, ct);
+
+            return Results.Ok(new
+            {
+                removed,
+                articleId,
+                frontendRefreshRequired = removed
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore rimozione offerta articolo",
                 detail: ex.Message,
                 statusCode: 500);
         }
@@ -2599,4 +2825,11 @@ sealed class GatewayRuntimeInfo
         var uptime = Uptime;
         return $"{(int)uptime.TotalDays:00}.{uptime.Hours:00}:{uptime.Minutes:00}:{uptime.Seconds:00}";
     }
+}
+
+public sealed class SetProductPromoDiscountWithValidityRequest
+{
+    public decimal DiscountPercent { get; set; }
+    public DateTime? ValidFrom { get; set; }
+    public DateTime? ValidTo { get; set; }
 }

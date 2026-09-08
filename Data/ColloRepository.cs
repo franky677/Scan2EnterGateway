@@ -82,7 +82,7 @@ public sealed class ColloRepository
 
                 var vatRate = article.Value.VatRate;
 
-                var grossUnitPrice =
+                var nominalGrossUnitPrice =
                     item.ListPrice.HasValue && item.ListPrice.Value >= 0m
                         ? item.ListPrice.Value
                         : item.Price;
@@ -94,14 +94,61 @@ public sealed class ColloRepository
                     item.Discount4,
                     item.ManualDiscount);
 
-                var grossTotal = decimal.Round(
-                    grossUnitPrice * item.Quantity,
+                var nominalGrossTotal = decimal.Round(
+                    nominalGrossUnitPrice * item.Quantity,
                     2,
                     MidpointRounding.AwayFromZero);
+
+                var calculatedNetTotal = ApplyDiscounts(
+                    nominalGrossTotal,
+                    discounts);
+
+                var targetNetTotal =
+                    item.TargetNetTotal.HasValue &&
+                    item.TargetNetTotal.Value >= 0m
+                        ? decimal.Round(
+                            item.TargetNetTotal.Value,
+                            2,
+                            MidpointRounding.AwayFromZero)
+                        : calculatedNetTotal;
+
+                /*
+                 * Due Retail, quando importa il collo, può ricalcolare il netto
+                 * partendo da Prezzo + Sconto1..4. Per questo non basta salvare
+                 * un TotaleNettoSconto diverso dal lordo: l'arrotondamento
+                 * verrebbe perso.
+                 *
+                 * Se Android ci fornisce TargetNetTotal, troviamo invece il
+                 * lordo più vicino a quello originale che, applicando gli stessi
+                 * sconti, produce ESATTAMENTE il netto richiesto. In questo modo
+                 * Prezzo/Totale/Sconti restano coerenti anche dopo il ricalcolo
+                 * effettuato dalla cassa.
+                 */
+                var grossTotal =
+                    FindGrossTotalForTargetNet(
+                        nominalGrossTotal,
+                        targetNetTotal,
+                        discounts);
+
+                var grossUnitPrice =
+                    item.Quantity == 0m
+                        ? nominalGrossUnitPrice
+                        : decimal.Round(
+                            grossTotal / item.Quantity,
+                            6,
+                            MidpointRounding.AwayFromZero);
 
                 var netTotal = ApplyDiscounts(
                     grossTotal,
                     discounts);
+
+                if (netTotal != targetNetTotal)
+                {
+                    throw new InvalidOperationException(
+                        $"Impossibile rappresentare il totale netto " +
+                        $"{targetNetTotal.ToString("0.00", CultureInfo.InvariantCulture)} " +
+                        $"per il barcode '{item.Barcode}' mantenendo gli sconti correnti.");
+                }
 
                 var discountAmount = decimal.Round(
                     grossTotal - netTotal,
@@ -999,6 +1046,70 @@ public sealed class ColloRepository
         }
 
         return net;
+    }
+
+
+    private static decimal FindGrossTotalForTargetNet(
+        decimal nominalGrossTotal,
+        decimal targetNetTotal,
+        IReadOnlyList<decimal> discounts)
+    {
+        nominalGrossTotal = decimal.Round(
+            nominalGrossTotal,
+            2,
+            MidpointRounding.AwayFromZero);
+
+        targetNetTotal = decimal.Round(
+            targetNetTotal,
+            2,
+            MidpointRounding.AwayFromZero);
+
+        if (ApplyDiscounts(nominalGrossTotal, discounts) == targetNetTotal)
+        {
+            return nominalGrossTotal;
+        }
+
+        if (discounts.All(x => x <= 0m))
+        {
+            return targetNetTotal;
+        }
+
+        /*
+         * Cerchiamo per centesimi attorno al lordo originale.
+         * L'arrotondamento commerciale normalmente richiede pochi centesimi;
+         * 50 euro di escursione rendono la ricerca robusta anche con sconti
+         * percentuali molto elevati.
+         */
+        const int maxDeltaCents = 5000;
+
+        var nominalCents = decimal.ToInt32(
+            nominalGrossTotal * 100m);
+
+        for (var delta = 1; delta <= maxDeltaCents; delta++)
+        {
+            var lowerCents = nominalCents - delta;
+
+            if (lowerCents >= 0)
+            {
+                var lower = lowerCents / 100m;
+
+                if (ApplyDiscounts(lower, discounts) == targetNetTotal)
+                {
+                    return lower;
+                }
+            }
+
+            var upper = (nominalCents + delta) / 100m;
+
+            if (ApplyDiscounts(upper, discounts) == targetNetTotal)
+            {
+                return upper;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Nessun prezzo lordo compatibile trovato per il netto " +
+            $"{targetNetTotal.ToString("0.00", CultureInfo.InvariantCulture)}.");
     }
 
 

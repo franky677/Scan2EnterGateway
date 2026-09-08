@@ -15,7 +15,8 @@ public sealed record CreateColloItemRequest(
     decimal Discount3 = 0m,
     decimal Discount4 = 0m,
     decimal ManualDiscount = 0m,
-    int? PriceListId = null);
+    int? PriceListId = null,
+    decimal? TargetNetTotal = null);
 
 public sealed class CreatedColloDto
 {
