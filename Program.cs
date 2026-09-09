@@ -110,6 +110,10 @@ app.MapGet("/", () => Results.Ok(new
         "PUT /api/product/{articleId}/promo-discount",
         "DELETE /api/product/{articleId}/promo-discount",
         "GET /api/promotions?status=&q=",
+        "GET /api/promotion-groups/producers?q=",
+        "PUT /api/promotion-groups/producer/{groupId}",
+        "DELETE /api/promotion-groups/{promoGroupId}",
+        "POST /api/promotion-groups/{promoGroupId}/materialize?limit=100",
         "/api/search",
         "/api/session/history",
         "/api/session/customers",
@@ -603,12 +607,21 @@ app.MapGet(
                     normalizedStatus,
                     ct);
 
+            var groups =
+                await repository.GetGroupListAsync(
+                    q,
+                    normalizedStatus,
+                    ct);
+
             return Results.Ok(new
             {
                 status = normalizedStatus,
                 query = (q ?? string.Empty).Trim(),
-                count = items.Count,
+                count = items.Count + groups.Count,
+                individualCount = items.Count,
+                groupCount = groups.Count,
                 generatedAt = DateTimeOffset.Now,
+                groups,
                 items
             });
         }
@@ -625,6 +638,238 @@ app.MapGet(
 // PROMO / OFFERTE SCAN2ENTER.
 // La percentuale viene conservata da Scan2Enter; Due Retail riceve
 // un Taglio Prezzo già arrotondato commercialmente ai 10 centesimi.
+
+// TEST CONTROLLATO PROMO DI GRUPPO.
+// Materializza al massimo "limit" articoli della promo indicata.
+// Esempio: POST /api/promotion-groups/2/materialize?limit=100
+
+// RICERCA PRODUTTORI / MARCHE PER NUOVE PROMO DI GRUPPO.
+// Usa la stessa eleggibilita' della materializzazione:
+// articolo attivo + listino pubblico 1 + prezzo > 0.
+app.MapGet(
+    "/api/promotion-groups/producers",
+    async (
+        string? q,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var items =
+                await repository.GetProducerOptionsAsync(
+                    q,
+                    ct);
+
+            return Results.Ok(new
+            {
+                query = (q ?? string.Empty).Trim(),
+                count = items.Count,
+                generatedAt = DateTimeOffset.Now,
+                items
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore ricerca produttori per promo",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+// CREA / MODIFICA PROMO DI GRUPPO PER PRODUTTORE.
+// groupId corrisponde a dbo.tabProduttori.IdProduttore.
+app.MapPut(
+    "/api/promotion-groups/producer/{groupId:long}",
+    async (
+        long groupId,
+        SaveProducerPromotionGroupRequest request,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (groupId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    saved = false,
+                    message = "Id produttore non valido."
+                });
+            }
+
+            if (request.DiscountPercent <= 0m || request.DiscountPercent > 100m)
+            {
+                return Results.BadRequest(new
+                {
+                    saved = false,
+                    message = "Lo sconto deve essere maggiore di 0 e non superiore a 100."
+                });
+            }
+
+            if (request.ValidFrom.HasValue &&
+                request.ValidTo.HasValue &&
+                request.ValidTo.Value < request.ValidFrom.Value)
+            {
+                return Results.BadRequest(new
+                {
+                    saved = false,
+                    message = "La data di fine promo non può precedere la data di inizio."
+                });
+            }
+
+            var group = await repository.SaveProducerGroupAsync(
+                request.IdPromoGroup,
+                groupId,
+                request.DiscountPercent,
+                request.ValidFrom,
+                request.ValidTo,
+                request.Enabled,
+                ct);
+
+            // Riconcilia l'intero gruppo.
+            // Per una promo attiva materializza tutti gli articoli eleggibili;
+            // per una promo inattiva/scaduta rimuove tutta la materializzazione
+            // tracciata. Le promo individuali continuano ad avere precedenza.
+            var reconciliation = await repository.ReconcileGroupAsync(
+                group.IdPromoGroup,
+                maxArticles: null,
+                cancellationToken: ct);
+
+            return Results.Ok(new
+            {
+                saved = true,
+                group,
+                reconciliation,
+                frontendRefreshRequired =
+                    reconciliation.Inserted > 0 ||
+                    reconciliation.Updated > 0 ||
+                    reconciliation.Removed > 0
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                saved = false,
+                message = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore salvataggio promo produttore",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+// ELIMINA PROMO DI GRUPPO E LA SUA MATERIALIZZAZIONE DUE.
+app.MapDelete(
+    "/api/promotion-groups/{promoGroupId:long}",
+    async (
+        long promoGroupId,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (promoGroupId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    deleted = false,
+                    message = "Id promo di gruppo non valido."
+                });
+            }
+
+            var deleted = await repository.DeleteGroupAsync(
+                promoGroupId,
+                ct);
+
+            if (!deleted)
+            {
+                return Results.NotFound(new
+                {
+                    deleted = false,
+                    promoGroupId,
+                    message = "Promo di gruppo non trovata."
+                });
+            }
+
+            return Results.Ok(new
+            {
+                deleted = true,
+                promoGroupId,
+                frontendRefreshRequired = true
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore eliminazione promo di gruppo",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapPost(
+    "/api/promotion-groups/{promoGroupId:long}/materialize",
+    async (
+        long promoGroupId,
+        int? limit,
+        ProductPromoRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (promoGroupId <= 0)
+            {
+                return Results.BadRequest(new
+                {
+                    materialized = false,
+                    message = "Id promo di gruppo non valido."
+                });
+            }
+
+            var selectedLimit = Math.Clamp(limit ?? 100, 1, 10000);
+
+            var result = await repository.ReconcileGroupAsync(
+                promoGroupId,
+                selectedLimit,
+                ct);
+
+            return Results.Ok(new
+            {
+                materialized = true,
+                promoGroupId,
+                requestedLimit = selectedLimit,
+                frontendRefreshRequired = result.Inserted > 0 || result.Updated > 0 || result.Removed > 0,
+                result
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                materialized = false,
+                promoGroupId,
+                message = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore materializzazione promo di gruppo",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
 app.MapGet(
     "/api/product/{articleId:long}/promo-discount",
     async (
@@ -2698,7 +2943,15 @@ app.MapPost("/api/labels/print", async (
     }
 });
 
+
 app.Run();
+
+record SaveProducerPromotionGroupRequest(
+    long? IdPromoGroup,
+    decimal DiscountPercent,
+    DateTime? ValidFrom,
+    DateTime? ValidTo,
+    bool Enabled = true);
 
 sealed record ProductPriceUpdateRequest(
     decimal Price);
