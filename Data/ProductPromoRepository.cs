@@ -87,6 +87,88 @@ public sealed class ProductPromoRepository
         };
     }
 
+    public async Task<ProductPromoDto?> GetEffectiveAsync(
+        long articleId,
+        CancellationToken cancellationToken = default)
+    {
+        if (articleId <= 0)
+            return null;
+
+        // Precedenza assoluta alla promo individuale, ma solo se attiva adesso.
+        var individualPromo = await GetAsync(articleId, cancellationToken);
+        var now = DateTime.Now;
+
+        if (individualPromo is not null &&
+            (!individualPromo.ValidFrom.HasValue || now >= individualPromo.ValidFrom.Value) &&
+            (!individualPromo.ValidTo.HasValue || now <= individualPromo.ValidTo.Value))
+        {
+            return individualPromo;
+        }
+
+        // Se non c'e' una promo individuale attiva, cerchiamo una promo marca
+        // realmente materializzata per l'articolo. Il match sull'hash Due evita
+        // di considerare tracking vecchi o una seconda promo di gruppo in conflitto.
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT TOP (1)
+                gi.ArticleId,
+                g.DiscountPercent,
+                gi.PublicPrice,
+                gi.OfferPrice,
+                g.ValidFrom,
+                g.ValidTo,
+                p.primaryHash,
+                gi.UpdatedAt
+            FROM dbo.Scan2EnterPromoGroupItems AS gi
+            INNER JOIN dbo.Scan2EnterPromoGroups AS g
+                ON g.IdPromoGroup = gi.IdPromoGroup
+            INNER JOIN due_prm.tabDettaglioPromoArticoliPrezzoImposto AS p
+                ON p.IdPromo = @promoId
+               AND p.idArticolo = gi.ArticleId
+               AND p.primaryHash = gi.DuePrimaryHash
+               AND ISNULL(p.idVariante1, -1) = -1
+               AND ISNULL(p.idVariante2, -1) = -1
+               AND ISNULL(p.idVariante3, -1) = -1
+            WHERE gi.ArticleId = @articleId
+              AND gi.Materialized = 1
+              AND g.Enabled = 1
+              AND g.GroupType = @groupType
+              AND (g.ValidFrom IS NULL OR g.ValidFrom <= @now)
+              AND (g.ValidTo IS NULL OR g.ValidTo >= @now)
+            ORDER BY g.UpdatedAt DESC, g.IdPromoGroup DESC;
+            """;
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@promoId", Scan2EnterPromoId);
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@groupType", ProducerGroupType);
+        command.Parameters.AddWithValue("@now", now);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+
+        return new ProductPromoDto
+        {
+            ArticleId = reader.GetInt64(reader.GetOrdinal("ArticleId")),
+            DiscountPercent = reader.GetDecimal(reader.GetOrdinal("DiscountPercent")),
+            PublicPrice = reader.GetDecimal(reader.GetOrdinal("PublicPrice")),
+            OfferPrice = reader.GetDecimal(reader.GetOrdinal("OfferPrice")),
+            ValidFrom = reader.IsDBNull(reader.GetOrdinal("ValidFrom"))
+                ? null
+                : reader.GetDateTime(reader.GetOrdinal("ValidFrom")),
+            ValidTo = reader.IsDBNull(reader.GetOrdinal("ValidTo"))
+                ? null
+                : reader.GetDateTime(reader.GetOrdinal("ValidTo")),
+            PrimaryHash = reader.IsDBNull(reader.GetOrdinal("primaryHash"))
+                ? null
+                : reader.GetString(reader.GetOrdinal("primaryHash")),
+            UpdatedAt = reader.GetDateTime(reader.GetOrdinal("UpdatedAt"))
+        };
+    }
+
     public async Task<ProductPromoDto> SetDiscountAsync(
         long articleId,
         decimal discountPercent,

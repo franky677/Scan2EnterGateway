@@ -887,7 +887,7 @@ app.MapGet(
                 });
             }
 
-            var promo = await repository.GetAsync(articleId, ct);
+            var promo = await repository.GetEffectiveAsync(articleId, ct);
 
             if (promo is null)
             {
