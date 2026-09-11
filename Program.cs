@@ -126,6 +126,7 @@ app.MapGet("/", () => Results.Ok(new
         "DELETE /api/promotion-groups/{promoGroupId}",
         "POST /api/promotion-groups/{promoGroupId}/materialize?limit=100",
         "GET /api/scan2enter-promotions",
+        "GET /api/scan2enter-promotions/effective/article/{articleId}",
         "POST /api/scan2enter-promotions",
         "PUT /api/scan2enter-promotions/{idPromotion}",
         "PUT /api/scan2enter-promotions/{idPromotion}/enabled",
@@ -903,6 +904,64 @@ app.MapGet(
         {
             return Results.Problem(
                 title: "Errore lettura promozioni Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapGet(
+    "/api/scan2enter-promotions/effective/article/{articleId:int}",
+    async (
+        int articleId,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            if (articleId <= 0)
+                return Results.BadRequest(new { active = false, message = "Id articolo non valido." });
+
+            var promotion =
+                await repository.GetEffectiveForArticleAsync(articleId, ct);
+
+            if (promotion is null)
+            {
+                return Results.Ok(new
+                {
+                    active = false,
+                    articleId
+                });
+            }
+
+            return Results.Ok(new
+            {
+                active = true,
+                promotion.ArticleId,
+                promotion.IdPromotion,
+                promotion.Name,
+                promotion.TargetType,
+                promotion.TargetId,
+                promotion.TargetCode,
+                promotion.DiscountPercent,
+                promotion.FixedPrice,
+                promotion.OriginalPublicPrice,
+                promotion.PromoPublicPrice,
+                promotion.LastPublishedPrice,
+                promotion.StartDate,
+                promotion.EndDate,
+                promotion.Priority,
+                promotion.AppliedAt
+            });
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return Results.BadRequest(new { active = false, error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore lettura promozione effettiva Scan2Enter",
                 detail: ex.Message,
                 statusCode: 500);
         }

@@ -55,6 +55,80 @@ public sealed class Scan2EnterPromotionRepository
         return result;
     }
 
+    public async Task<Scan2EnterEffectivePromotionDto?> GetEffectiveForArticleAsync(
+        int articleId,
+        CancellationToken cancellationToken = default)
+    {
+        if (articleId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(articleId));
+
+        const string sql = """
+            SELECT TOP (1)
+                p.IdPromotion,
+                p.Name,
+                p.TargetType,
+                p.TargetId,
+                p.TargetCode,
+                p.DiscountPercent,
+                p.FixedPrice,
+                p.StartDate,
+                p.EndDate,
+                p.Priority,
+                i.OriginalPublicPrice,
+                i.PromoPublicPrice,
+                i.LastPublishedPrice,
+                i.AppliedAt
+            FROM dbo.Scan2EnterPromotionItems AS i
+            INNER JOIN dbo.Scan2EnterPromotions AS p
+                ON p.IdPromotion = i.IdPromotion
+            WHERE i.IdArticolo = @articleId
+              AND i.IsApplied = 1
+              AND p.IsEnabled = 1
+              AND SYSDATETIME() >= p.StartDate
+              AND SYSDATETIME() <= p.EndDate
+            ORDER BY
+                CASE WHEN UPPER(p.TargetType) = 'ARTICLE' THEN 2 ELSE 1 END DESC,
+                p.Priority DESC,
+                p.IdPromotion ASC;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@articleId", articleId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+
+        return new Scan2EnterEffectivePromotionDto
+        {
+            ArticleId = articleId,
+            IdPromotion = reader.GetInt32(reader.GetOrdinal("IdPromotion")),
+            Name = reader.GetString(reader.GetOrdinal("Name")),
+            TargetType = reader.GetString(reader.GetOrdinal("TargetType")),
+            TargetId = reader.IsDBNull(reader.GetOrdinal("TargetId"))
+                ? null : reader.GetInt32(reader.GetOrdinal("TargetId")),
+            TargetCode = reader.IsDBNull(reader.GetOrdinal("TargetCode"))
+                ? null : reader.GetString(reader.GetOrdinal("TargetCode")),
+            DiscountPercent = reader.IsDBNull(reader.GetOrdinal("DiscountPercent"))
+                ? null : reader.GetDecimal(reader.GetOrdinal("DiscountPercent")),
+            FixedPrice = reader.IsDBNull(reader.GetOrdinal("FixedPrice"))
+                ? null : reader.GetDecimal(reader.GetOrdinal("FixedPrice")),
+            OriginalPublicPrice = reader.GetDecimal(reader.GetOrdinal("OriginalPublicPrice")),
+            PromoPublicPrice = reader.GetDecimal(reader.GetOrdinal("PromoPublicPrice")),
+            LastPublishedPrice = reader.IsDBNull(reader.GetOrdinal("LastPublishedPrice"))
+                ? null : reader.GetDecimal(reader.GetOrdinal("LastPublishedPrice")),
+            StartDate = reader.GetDateTime(reader.GetOrdinal("StartDate")),
+            EndDate = reader.GetDateTime(reader.GetOrdinal("EndDate")),
+            Priority = reader.GetInt32(reader.GetOrdinal("Priority")),
+            AppliedAt = reader.IsDBNull(reader.GetOrdinal("AppliedAt"))
+                ? null : reader.GetDateTime(reader.GetOrdinal("AppliedAt"))
+        };
+    }
+
+
     public async Task<Scan2EnterPromotionDto?> GetByIdAsync(
         int idPromotion,
         CancellationToken cancellationToken = default)
@@ -1361,6 +1435,25 @@ public sealed class Scan2EnterPromotionDto
     public int Priority { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+}
+
+public sealed class Scan2EnterEffectivePromotionDto
+{
+    public int ArticleId { get; set; }
+    public int IdPromotion { get; set; }
+    public string Name { get; set; } = "";
+    public string TargetType { get; set; } = "";
+    public int? TargetId { get; set; }
+    public string? TargetCode { get; set; }
+    public decimal? DiscountPercent { get; set; }
+    public decimal? FixedPrice { get; set; }
+    public decimal OriginalPublicPrice { get; set; }
+    public decimal PromoPublicPrice { get; set; }
+    public decimal? LastPublishedPrice { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+    public int Priority { get; set; }
+    public DateTime? AppliedAt { get; set; }
 }
 
 public sealed class Scan2EnterPromotionCreateDto
