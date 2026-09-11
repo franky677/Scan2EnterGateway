@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
 using Scan2EnterGateway;
@@ -20,7 +20,18 @@ var logDirectory = Path.Combine(contentRoot, "Logs");
 builder.Services.AddSingleton<ReorderRepository>();
 builder.Services.AddSingleton<ProductRepository>();
 builder.Services.AddSingleton<ProductPromoRepository>();
-builder.Services.AddHostedService<ProductPromoValidityWorker>();
+builder.Services.AddSingleton<Scan2EnterPromotionRepository>();
+
+if (!builder.Configuration.GetValue<bool>("DisableLegacyPromoWorker"))
+{
+    builder.Services.AddHostedService<ProductPromoValidityWorker>();
+}
+
+if (builder.Configuration.GetValue<bool>("EnableScan2EnterPromotionWorker"))
+{
+    builder.Services.AddHostedService<Scan2EnterPromotionWorker>();
+}
+
 builder.Services.AddSingleton<LocationRepository>();
 builder.Services.AddSingleton<ProductImageRepository>();
 builder.Services.AddSingleton<SessionRepository>();
@@ -114,6 +125,11 @@ app.MapGet("/", () => Results.Ok(new
         "PUT /api/promotion-groups/producer/{groupId}",
         "DELETE /api/promotion-groups/{promoGroupId}",
         "POST /api/promotion-groups/{promoGroupId}/materialize?limit=100",
+        "GET /api/scan2enter-promotions",
+        "POST /api/scan2enter-promotions",
+        "PUT /api/scan2enter-promotions/{idPromotion}",
+        "PUT /api/scan2enter-promotions/{idPromotion}/enabled",
+        "DELETE /api/scan2enter-promotions/{idPromotion}",
         "/api/search",
         "/api/session/history",
         "/api/session/customers",
@@ -514,7 +530,7 @@ app.MapPut(
                 return Results.BadRequest(new
                 {
                     updated = false,
-                    message = "Il prezzo non può essere negativo."
+                    message = "Il prezzo non puÃ² essere negativo."
                 });
             }
 
@@ -637,7 +653,7 @@ app.MapGet(
 
 // PROMO / OFFERTE SCAN2ENTER.
 // La percentuale viene conservata da Scan2Enter; Due Retail riceve
-// un Taglio Prezzo già arrotondato commercialmente ai 10 centesimi.
+// un Taglio Prezzo giÃ  arrotondato commercialmente ai 10 centesimi.
 
 // TEST CONTROLLATO PROMO DI GRUPPO.
 // Materializza al massimo "limit" articoli della promo indicata.
@@ -715,7 +731,7 @@ app.MapPut(
                 return Results.BadRequest(new
                 {
                     saved = false,
-                    message = "La data di fine promo non può precedere la data di inizio."
+                    message = "La data di fine promo non puÃ² precedere la data di inizio."
                 });
             }
 
@@ -871,6 +887,330 @@ app.MapPost(
 
 
 app.MapGet(
+    "/api/scan2enter-promotions",
+    async (
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var promotions =
+                await repository.GetAllAsync(ct);
+
+            return Results.Ok(promotions);
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore lettura promozioni Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapPost(
+    "/api/scan2enter-promotions",
+    async (
+        Scan2EnterPromotionCreateDto request,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var promotion =
+                await repository.CreateAsync(
+                    request,
+                    ct);
+
+            return Results.Created(
+                $"/api/scan2enter-promotions/{promotion.IdPromotion}",
+                promotion);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new
+            {
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore creazione promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+app.MapGet(
+    "/api/scan2enter-promotions/preview/article/{articleId:int}",
+    async (
+        int articleId,
+        decimal? discountPercent,
+        decimal? fixedPrice,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var preview =
+                await repository.PreviewArticleAsync(
+                    articleId,
+                    discountPercent,
+                    fixedPrice,
+                    ct);
+
+            return Results.Ok(preview);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new
+            {
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore preview promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+
+app.MapPost(
+    "/api/scan2enter-promotions/{idPromotion:int}/apply/article/{articleId:int}",
+    async (
+        int idPromotion,
+        int articleId,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var result =
+                await repository.ApplyArticleAsync(
+                    idPromotion,
+                    articleId,
+                    ct);
+
+            return result.Conflict
+                ? Results.Conflict(result)
+                : Results.Ok(result);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return Results.BadRequest(new
+            {
+                applied = false,
+                error = ex.Message
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                applied = false,
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore applicazione promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapPost(
+    "/api/scan2enter-promotions/{idPromotion:int}/restore/article/{articleId:int}",
+    async (
+        int idPromotion,
+        int articleId,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var result =
+                await repository.RestoreArticleAsync(
+                    idPromotion,
+                    articleId,
+                    ct);
+
+            return result.Conflict
+                ? Results.Conflict(result)
+                : Results.Ok(result);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return Results.BadRequest(new
+            {
+                restored = false,
+                error = ex.Message
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                restored = false,
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore ripristino promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapPut(
+    "/api/scan2enter-promotions/{idPromotion:int}",
+    async (
+        int idPromotion,
+        Scan2EnterPromotionCreateDto request,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var promotion =
+                await repository.UpdateAsync(
+                    idPromotion,
+                    request,
+                    ct);
+
+            return Results.Ok(new
+            {
+                updated = true,
+                promotion
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new
+            {
+                updated = false,
+                error = ex.Message
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                updated = false,
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore modifica promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapPut(
+    "/api/scan2enter-promotions/{idPromotion:int}/enabled",
+    async (
+        int idPromotion,
+        Scan2EnterPromotionEnabledRequest request,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var promotion =
+                await repository.SetEnabledAsync(
+                    idPromotion,
+                    request.IsEnabled,
+                    ct);
+
+            return Results.Ok(new
+            {
+                updated = true,
+                promotion
+            });
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return Results.BadRequest(new
+            {
+                updated = false,
+                error = ex.Message
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.NotFound(new
+            {
+                updated = false,
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore abilitazione promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+app.MapDelete(
+    "/api/scan2enter-promotions/{idPromotion:int}",
+    async (
+        int idPromotion,
+        Scan2EnterPromotionRepository repository,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            var result =
+                await repository.DeleteSafelyAsync(
+                    idPromotion,
+                    ct);
+
+            if (result.Conflict)
+                return Results.Conflict(result);
+
+            if (!result.Deleted)
+                return Results.NotFound(result);
+
+            return Results.Ok(result);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return Results.BadRequest(new
+            {
+                deleted = false,
+                error = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(
+                title: "Errore cancellazione promozione Scan2Enter",
+                detail: ex.Message,
+                statusCode: 500);
+        }
+    });
+
+
+
+app.MapGet(
     "/api/product/{articleId:long}/promo-discount",
     async (
         long articleId,
@@ -945,7 +1285,7 @@ app.MapPut(
                 return Results.BadRequest(new
                 {
                     updated = false,
-                    message = "La data di fine promo non può precedere la data di inizio."
+                    message = "La data di fine promo non puÃ² precedere la data di inizio."
                 });
             }
 
@@ -1260,7 +1600,7 @@ app.MapPost("/api/session/colli", async (
             return Results.BadRequest(new
             {
                 created = false,
-                message = "Barcode, quantità o prezzo non validi."
+                message = "Barcode, quantitÃ  o prezzo non validi."
             });
         }
 
@@ -1634,7 +1974,7 @@ app.MapGet("/api/product/{barcode}/image", async (
     try
     {
         // Non memorizzare in cache i risultati senza immagine:
-        // appena viene aggiunta una foto, l'app potrà visualizzarla subito.
+        // appena viene aggiunta una foto, l'app potrÃ  visualizzarla subito.
         response.Headers["Cache-Control"] = "no-store";
         var product = await productRepository.GetByBarcodeAsync(
             barcode,
@@ -1669,7 +2009,7 @@ app.MapGet("/api/product/{barcode}/image", async (
             return Results.NotFound(new
             {
                 message =
-                    "L'immagine è registrata nel database, ma il file non esiste.",
+                    "L'immagine Ã¨ registrata nel database, ma il file non esiste.",
                 articleId = product.ArticleId,
                 fileName = Path.GetFileName(imagePath)
             });
@@ -1745,7 +2085,7 @@ app.MapPost("/api/locations", async (
         {
             return Results.BadRequest(new
             {
-                message = "Il nome dell'ubicazione è obbligatorio."
+                message = "Il nome dell'ubicazione Ã¨ obbligatorio."
             });
         }
 
@@ -1787,7 +2127,7 @@ app.MapPut("/api/locations/{locationId:int}", async (
         {
             return Results.BadRequest(new
             {
-                message = "Il nome dell'ubicazione è obbligatorio."
+                message = "Il nome dell'ubicazione Ã¨ obbligatorio."
             });
         }
 
@@ -1804,7 +2144,7 @@ app.MapPut("/api/locations/{locationId:int}", async (
             LocationRenameStatus.Duplicate => Results.Conflict(new
             {
                 renamed = false,
-                message = "Esiste già un'ubicazione con questo nome.",
+                message = "Esiste giÃ  un'ubicazione con questo nome.",
                 location = result.Location
             }),
 
@@ -1952,7 +2292,7 @@ app.MapPost(
                 added,
                 message = added
                     ? "Ubicazione aggiunta."
-                    : "Ubicazione già presente.",
+                    : "Ubicazione giÃ  presente.",
                 locations
             });
         }
@@ -2298,7 +2638,7 @@ app.MapGet("/api/inventory-analysis/query", async (
         var modeTitle = normalizedMode switch
         {
             "never-sold" => "MAI VENDUTI",
-            "top-sold" => $"PIÙ VENDUTI - ULTIMI {selectedPeriodMonths} MESI",
+            "top-sold" => $"PIÃ™ VENDUTI - ULTIMI {selectedPeriodMonths} MESI",
             "stopped" => $"FERMI DA ALMENO {selectedPeriodMonths} MESI",
             "dead-capital" => "CAPITALE FERMO",
             "growing" => "IN CRESCITA - 12 MESI VS 12 PRECEDENTI",
@@ -2358,7 +2698,7 @@ app.MapPost("/api/inventory-analysis/report", async (
         {
             return Results.BadRequest(new
             {
-                message = "La data di valorizzazione non può essere futura."
+                message = "La data di valorizzazione non puÃ² essere futura."
             });
         }
 
@@ -2379,7 +2719,7 @@ app.MapPost("/api/inventory-analysis/report", async (
         static string Clip(string? value, int max)
         {
             var s = (value ?? "").Trim();
-            return s.Length <= max ? s : s[..Math.Max(0, max - 1)] + "…";
+            return s.Length <= max ? s : s[..Math.Max(0, max - 1)] + "â€¦";
         }
 
         static string Classification(InventoryAnalysisItemDto x)
@@ -2490,8 +2830,8 @@ app.MapPost("/api/inventory-analysis/report", async (
   <td class="code-col">{H(x.ArticleCode)}</td>
   <td class="description-col">{H(Clip(x.Description, extendedReport ? 44 : 80))}</td>
   <td class="num qty-col">{Q(x.Quantity)}</td>
-  <td class="num cost-col">{N(unitCost)} €</td>
-  <td class="num total-col">{N(rowTotal)} €</td>
+  <td class="num cost-col">{N(unitCost)} â‚¬</td>
+  <td class="num total-col">{N(rowTotal)} â‚¬</td>
   {extras}
 </tr>
 """;
@@ -2501,7 +2841,7 @@ app.MapPost("/api/inventory-analysis/report", async (
                 ? $"""
 <div class="grand-total">
   <span>TOTALE VALORIZZAZIONE MAGAZZINO</span>
-  <strong>{N(totalValue)} €</strong>
+  <strong>{N(totalValue)} â‚¬</strong>
 </div>
 """
                 : "";
@@ -2514,8 +2854,8 @@ app.MapPost("/api/inventory-analysis/report", async (
     <div class="report-subtitle">Giacenze al {{stockDate:dd/MM/yyyy}}</div>
     <div class="valuation-line">Valorizzazione: <strong>{{valuationTitle}}</strong></div>
     <div class="meta">
-      {{items.Count}} articoli · Giacenza {{Q(totalQuantity)}} · Totale {{N(totalValue)}} € ·
-      {{H(optionsText)}} · Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
+      {{items.Count}} articoli Â· Giacenza {{Q(totalQuantity)}} Â· Totale {{N(totalValue)}} â‚¬ Â·
+      {{H(optionsText)}} Â· Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
     </div>
   </div>
 
@@ -2844,7 +3184,7 @@ app.MapPost("/api/labels/print", async (
             return Results.BadRequest(new
             {
                 printed = false,
-                message = "Per ora è disponibile soltanto la GoDEX G500."
+                message = "Per ora Ã¨ disponibile soltanto la GoDEX G500."
             });
         }
 
@@ -2853,7 +3193,7 @@ app.MapPost("/api/labels/print", async (
             return Results.BadRequest(new
             {
                 printed = false,
-                message = "La quantità deve essere compresa tra 1 e 100."
+                message = "La quantitÃ  deve essere compresa tra 1 e 100."
             });
         }
 
@@ -2944,7 +3284,15 @@ app.MapPost("/api/labels/print", async (
 });
 
 
+
+
 app.Run();
+
+public sealed class Scan2EnterPromotionEnabledRequest
+{
+    public bool IsEnabled { get; set; }
+}
+
 
 record SaveProducerPromotionGroupRequest(
     long? IdPromoGroup,
