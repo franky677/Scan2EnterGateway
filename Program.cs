@@ -1689,6 +1689,137 @@ app.MapPost("/api/session/colli", async (
 });
 
 
+app.MapPost("/api/session/colli/{testataId:int}/send-to-front", async (
+    int testataId,
+    ColloRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (testataId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                sent = false,
+                confirmed = false,
+                message = "Id collo non valido."
+            });
+        }
+
+        var collo = await repository.GetHistoryDetailAsync(testataId, ct);
+
+        if (collo is null)
+        {
+            return Results.NotFound(new
+            {
+                sent = false,
+                confirmed = false,
+                message = "Collo non trovato."
+            });
+        }
+
+        if (collo.IsElaborato)
+        {
+            return Results.Conflict(new
+            {
+                sent = false,
+                confirmed = true,
+                testataId = collo.TestataId,
+                numeroCollo = collo.NumeroCollo,
+                barcodeCollo = collo.BarcodeCollo,
+                message = "Il collo risulta già elaborato dal FRONT."
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(collo.BarcodeCollo) ||
+            collo.BarcodeCollo.Length != 13 ||
+            !collo.BarcodeCollo.All(char.IsDigit))
+        {
+            return Results.BadRequest(new
+            {
+                sent = false,
+                confirmed = false,
+                message = "Barcode collo non valido."
+            });
+        }
+
+        var helperResult =
+            await FrontHelperClient.SendColloAsync(
+                collo.BarcodeCollo,
+                ct);
+
+        if (!helperResult.Success)
+        {
+            return Results.Json(
+                new
+                {
+                    sent = false,
+                    confirmed = false,
+                    testataId = collo.TestataId,
+                    numeroCollo = collo.NumeroCollo,
+                    barcodeCollo = collo.BarcodeCollo,
+                    message = helperResult.Message
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        // L'helper conferma soltanto di avere inviato i tasti a DUE.
+        // La vera conferma arriva da Due Retail quando IsElaborato diventa 1.
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            await Task.Delay(500, ct);
+
+            var refreshed =
+                await repository.GetHistoryDetailAsync(
+                    testataId,
+                    ct);
+
+            if (refreshed?.IsElaborato == true)
+            {
+                return Results.Ok(new
+                {
+                    sent = true,
+                    confirmed = true,
+                    testataId = refreshed.TestataId,
+                    numeroCollo = refreshed.NumeroCollo,
+                    barcodeCollo = refreshed.BarcodeCollo,
+                    message = "Collo caricato nel FRONT e confermato da Due Retail."
+                });
+            }
+        }
+
+        return Results.Json(
+            new
+            {
+                sent = true,
+                confirmed = false,
+                testataId = collo.TestataId,
+                numeroCollo = collo.NumeroCollo,
+                barcodeCollo = collo.BarcodeCollo,
+                message = "Il comando è stato inviato al FRONT, ma Due Retail non ha ancora confermato l'elaborazione del collo."
+            },
+            statusCode: StatusCodes.Status202Accepted);
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.Json(
+            new
+            {
+                sent = false,
+                confirmed = false,
+                message = "Invio al FRONT annullato."
+            },
+            statusCode: StatusCodes.Status408RequestTimeout);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore invio collo al FRONT",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 
 // SCADENZE PRODOTTI SCAN2ENTER.
 // Dato proprietario Scan2Enter, separato dalle tabelle funzionali di Due Retail.
