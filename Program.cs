@@ -3476,20 +3476,36 @@ app.MapPost("/api/labels/print", async (
 
 
 
-app.MapGet("/api/app-update/latest", async () =>
+app.MapGet("/api/app-update/latest", async (string? channel) =>
 {
-    var manifestPath = Path.Combine(contentRoot, "updates", "stable", "manifest.json");
+    channel = string.Equals(channel, "test", StringComparison.OrdinalIgnoreCase)
+        ? "test"
+        : "stable";
+
+    var manifestPath = Path.Combine(contentRoot, "updates", channel, "manifest.json");
+    if (!File.Exists(manifestPath))
+        return Results.NotFound();
+
     using var stream = File.OpenRead(manifestPath);
     using var document = await System.Text.Json.JsonDocument.ParseAsync(stream);
     return Results.Ok(document.RootElement.Clone());
 });
 
-app.MapGet("/api/app-update/download", () =>
+app.MapGet("/api/app-update/download", (string? channel) =>
 {
-    var apkPath = Path.Combine(contentRoot, "updates", "stable", "Scan2Enter.apk");
+    channel = string.Equals(channel, "test", StringComparison.OrdinalIgnoreCase)
+        ? "test"
+        : "stable";
+
+    var apkPath = Path.Combine(contentRoot, "updates", channel, "Scan2Enter.apk");
     if (!File.Exists(apkPath))
         return Results.NotFound();
-    return Results.File(apkPath, "application/vnd.android.package-archive", "Scan2Enter.apk", enableRangeProcessing: true);
+
+    return Results.File(
+        apkPath,
+        "application/vnd.android.package-archive",
+        "Scan2Enter.apk",
+        enableRangeProcessing: true);
 });
 
 app.Run();

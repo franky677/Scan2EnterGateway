@@ -43,3 +43,6 @@ publish/
 
 # APK distribuiti dal Gateway
 updates/**/*.apk
+
+# Tutti gli output di publish locali
+/publish*/
