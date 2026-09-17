@@ -3476,6 +3476,22 @@ app.MapPost("/api/labels/print", async (
 
 
 
+app.MapGet("/api/app-update/latest", async () =>
+{
+    var manifestPath = Path.Combine(contentRoot, "updates", "stable", "manifest.json");
+    using var stream = File.OpenRead(manifestPath);
+    using var document = await System.Text.Json.JsonDocument.ParseAsync(stream);
+    return Results.Ok(document.RootElement.Clone());
+});
+
+app.MapGet("/api/app-update/download", () =>
+{
+    var apkPath = Path.Combine(contentRoot, "updates", "stable", "Scan2Enter.apk");
+    if (!File.Exists(apkPath))
+        return Results.NotFound();
+    return Results.File(apkPath, "application/vnd.android.package-archive", "Scan2Enter.apk", enableRangeProcessing: true);
+});
+
 app.Run();
 
 public sealed class Scan2EnterPromotionEnabledRequest
