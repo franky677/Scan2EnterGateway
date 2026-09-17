@@ -40,3 +40,6 @@ publish/
 /runtimes/
 /zh-Hans/
 /zh-Hant/
+
+# APK distribuiti dal Gateway
+updates/**/*.apk
