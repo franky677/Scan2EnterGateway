@@ -265,6 +265,35 @@ public sealed class Scan2EnterPromotionRepository
             throw new ArgumentException(
                 "La data di fine promo non può precedere la data di inizio.");
 
+        if (targetType == "ARTICLE" && dto.TargetId.HasValue)
+        {
+            const string duplicateSql = """
+                SELECT TOP (1) IdPromotion
+                FROM dbo.Scan2EnterPromotions
+                WHERE UPPER(TargetType) = 'ARTICLE'
+                  AND TargetId = @targetId
+                ORDER BY IdPromotion DESC;
+                """;
+
+            await using var duplicateConnection = new SqlConnection(_connectionString);
+            await duplicateConnection.OpenAsync(cancellationToken);
+
+            await using var duplicateCommand =
+                new SqlCommand(duplicateSql, duplicateConnection);
+
+            duplicateCommand.Parameters.AddWithValue("@targetId", dto.TargetId.Value);
+
+            var existingId =
+                await duplicateCommand.ExecuteScalarAsync(cancellationToken);
+
+            if (existingId != null && existingId != DBNull.Value)
+            {
+                throw new ArgumentException(
+                    $"Esiste già una promozione Scan2Enter per l'articolo {dto.TargetId.Value} " +
+                    $"(IdPromotion {Convert.ToInt32(existingId)}). Modificare la promozione esistente.");
+            }
+        }
+
         const string sql = """
             INSERT INTO dbo.Scan2EnterPromotions
             (
