@@ -160,6 +160,107 @@ public sealed class ProductRepository
     }
 
 
+    public async Task<decimal?> GetCurrentStockAsync(
+        long articleId,
+        CancellationToken cancellationToken = default)
+    {
+        if (articleId <= 0)
+        {
+            return null;
+        }
+
+        const string sql = """
+            SELECT TOP (1)
+                g.Giacenza
+            FROM dbo.tabGiacenze AS g
+            WHERE g.idArticolo = @articleId
+              AND g.idMagazzino = @warehouseId;
+            """;
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@warehouseId", _warehouseId);
+        command.CommandTimeout = 30;
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+
+        if (value == null || value == DBNull.Value)
+        {
+            return 0m;
+        }
+
+        return Convert.ToDecimal(
+            value,
+            CultureInfo.InvariantCulture);
+    }
+
+    public async Task<Dictionary<long, decimal>> GetCurrentStocksAsync(
+        IEnumerable<long> articleIds,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = articleIds
+            .Where(id => id > 0)
+            .Distinct()
+            .ToArray();
+
+        var result = new Dictionary<long, decimal>();
+
+        if (ids.Length == 0)
+        {
+            return result;
+        }
+
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        const int batchSize = 1000;
+
+        foreach (var batch in ids.Chunk(batchSize))
+        {
+            var parameterNames = batch
+                .Select((_, index) => $"@id{index}")
+                .ToArray();
+
+            var sql = $"""
+                SELECT
+                    g.idArticolo,
+                    g.Giacenza
+                FROM dbo.tabGiacenze AS g
+                WHERE g.idMagazzino = @warehouseId
+                  AND g.idArticolo IN ({string.Join(", ", parameterNames)});
+                """;
+
+            await using var command = new SqlCommand(sql, connection);
+            command.Parameters.AddWithValue("@warehouseId", _warehouseId);
+            command.CommandTimeout = 30;
+
+            for (var i = 0; i < batch.Length; i++)
+            {
+                command.Parameters.AddWithValue(parameterNames[i], batch[i]);
+            }
+
+            await using var reader =
+                await command.ExecuteReaderAsync(cancellationToken);
+
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var articleId = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+                var stock = reader.IsDBNull(1)
+                    ? 0m
+                    : Convert.ToDecimal(
+                        reader.GetValue(1),
+                        CultureInfo.InvariantCulture);
+
+                result[articleId] = stock;
+            }
+        }
+
+        return result;
+    }
+
     public async Task<List<PriceListDto>> GetPriceListsAsync(
         long articleId,
         CancellationToken cancellationToken = default)
@@ -253,7 +354,7 @@ public sealed class ProductRepository
         {
             throw new ArgumentOutOfRangeException(
                 nameof(salePrice),
-                "Il prezzo non può essere negativo.");
+                "Il prezzo non puÃƒÂ² essere negativo.");
         }
 
         const string sql = """
@@ -1125,35 +1226,35 @@ public sealed class ProductRepository
 
             if (copertura <= 3m)
             {
-                return $"FIFO {valoreFifo:0.00} € - copertura fino a 3 mesi";
+                return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - copertura fino a 3 mesi";
             }
 
             if (copertura <= 6m)
             {
-                return $"FIFO {valoreFifo:0.00} € - copertura 3-6 mesi";
+                return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - copertura 3-6 mesi";
             }
 
             if (copertura <= 12m)
             {
-                return $"FIFO {valoreFifo:0.00} € - copertura 6-12 mesi";
+                return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - copertura 6-12 mesi";
             }
 
             if (copertura <= 24m)
             {
-                return $"FIFO {valoreFifo:0.00} € - copertura 12-24 mesi";
+                return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - copertura 12-24 mesi";
             }
 
             if (copertura <= 60m)
             {
-                return $"FIFO {valoreFifo:0.00} € - copertura molto lunga";
+                return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - copertura molto lunga";
             }
 
-            return $"FIFO {valoreFifo:0.00} € - copertura oltre 5 anni";
+            return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - copertura oltre 5 anni";
         }
 
         if (ultimaVendita is null)
         {
-            return $"FIFO {valoreFifo:0.00} € - mai venduto";
+            return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - mai venduto";
         }
 
         var anniFermo =
@@ -1164,10 +1265,10 @@ public sealed class ProductRepository
 
         if (anniFermo >= 1)
         {
-            return $"FIFO {valoreFifo:0.00} € - nessuna vendita 12M, fermo da circa {anniFermo} anni";
+            return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - nessuna vendita 12M, fermo da circa {anniFermo} anni";
         }
 
-        return $"FIFO {valoreFifo:0.00} € - nessuna vendita negli ultimi 12 mesi";
+        return $"FIFO {valoreFifo:0.00} Ã¢â€šÂ¬ - nessuna vendita negli ultimi 12 mesi";
     }
 
     private static string GetString(

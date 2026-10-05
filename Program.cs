@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
 using Scan2EnterGateway;
@@ -531,7 +531,7 @@ app.MapPut(
                 return Results.BadRequest(new
                 {
                     updated = false,
-                    message = "Il prezzo non puÃ² essere negativo."
+                    message = "Il prezzo non puÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â² essere negativo."
                 });
             }
 
@@ -654,7 +654,7 @@ app.MapGet(
 
 // PROMO / OFFERTE SCAN2ENTER.
 // La percentuale viene conservata da Scan2Enter; Due Retail riceve
-// un Taglio Prezzo giÃ  arrotondato commercialmente ai 10 centesimi.
+// un Taglio Prezzo giÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  arrotondato commercialmente ai 10 centesimi.
 
 // TEST CONTROLLATO PROMO DI GRUPPO.
 // Materializza al massimo "limit" articoli della promo indicata.
@@ -732,7 +732,7 @@ app.MapPut(
                 return Results.BadRequest(new
                 {
                     saved = false,
-                    message = "La data di fine promo non puÃ² precedere la data di inizio."
+                    message = "La data di fine promo non puÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â² precedere la data di inizio."
                 });
             }
 
@@ -1344,7 +1344,7 @@ app.MapPut(
                 return Results.BadRequest(new
                 {
                     updated = false,
-                    message = "La data di fine promo non puÃ² precedere la data di inizio."
+                    message = "La data di fine promo non puÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â² precedere la data di inizio."
                 });
             }
 
@@ -1659,7 +1659,7 @@ app.MapPost("/api/session/colli", async (
             return Results.BadRequest(new
             {
                 created = false,
-                message = "Barcode, quantitÃ  o prezzo non validi."
+                message = "Barcode, quantitÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  o prezzo non validi."
             });
         }
 
@@ -1727,7 +1727,7 @@ app.MapPost("/api/session/colli/{testataId:int}/send-to-front", async (
                 testataId = collo.TestataId,
                 numeroCollo = collo.NumeroCollo,
                 barcodeCollo = collo.BarcodeCollo,
-                message = "Il collo risulta già elaborato dal FRONT."
+                message = "Il collo risulta giÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  elaborato dal FRONT."
             });
         }
 
@@ -1796,7 +1796,7 @@ app.MapPost("/api/session/colli/{testataId:int}/send-to-front", async (
                 testataId = collo.TestataId,
                 numeroCollo = collo.NumeroCollo,
                 barcodeCollo = collo.BarcodeCollo,
-                message = "Il comando è stato inviato al FRONT, ma Due Retail non ha ancora confermato l'elaborazione del collo."
+                message = "Il comando ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ stato inviato al FRONT, ma Due Retail non ha ancora confermato l'elaborazione del collo."
             },
             statusCode: StatusCodes.Status202Accepted);
     }
@@ -1962,16 +1962,45 @@ app.MapGet("/api/product-expiry/alerts", async (
 
 app.MapGet("/api/favorites", async (
     FavoriteRepository repository,
+    ProductRepository productRepository,
     CancellationToken ct) =>
 {
     try
     {
         var items = await repository.GetAllAsync(ct);
 
+        var currentStocks = await productRepository.GetCurrentStocksAsync(
+            items.Where(item => item.SellableQuantity.HasValue && item.SellableReferenceStock.HasValue).Select(item => item.ArticleId),
+            ct);
+
+        var resultItems = new List<object>(items.Count);
+
+        foreach (var item in items)
+        {
+            decimal? currentStock = null;
+            decimal? sellableRemaining = null;
+
+            if (item.SellableQuantity.HasValue && item.SellableReferenceStock.HasValue)
+            {
+                if (currentStocks.TryGetValue(item.ArticleId, out var stock))
+                {
+                    currentStock = stock;
+                }
+
+                if (currentStock.HasValue)
+                {
+                    var stockDecrease = Math.Max(0m, item.SellableReferenceStock.Value - currentStock.Value);
+                    sellableRemaining = Math.Max(0m, item.SellableQuantity.Value - stockDecrease);
+                }
+            }
+
+            resultItems.Add(new { item.ArticleId, item.Barcode, item.ArticleCode, item.Description, item.PublicPrice, item.Stock, item.SellableQuantity, item.SellableReferenceStock, CurrentStock = currentStock, SellableRemaining = sellableRemaining, item.AddedAtUtc });
+        }
+
         return Results.Ok(new
         {
-            count = items.Count,
-            items
+            count = resultItems.Count,
+            items = resultItems
         });
     }
     catch (Exception ex)
@@ -2012,6 +2041,86 @@ app.MapPost("/api/favorites", async (
     {
         return Results.Problem(
             title: "Errore salvataggio Preferito Scan2Enter",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPut("/api/favorites/{articleId:long}/sellable", async (
+    long articleId,
+    FavoriteSellableQuantityRequest request,
+    FavoriteRepository repository,
+    ProductRepository productRepository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                saved = false,
+                message = "Id articolo non valido."
+            });
+        }
+
+        if (request.Quantity < 0)
+        {
+            return Results.BadRequest(new
+            {
+                saved = false,
+                message = "La quantita vendibile non puo essere negativa."
+            });
+        }
+
+        decimal? referenceStock = null;
+
+        if (request.Quantity.HasValue)
+        {
+            referenceStock = await productRepository.GetCurrentStockAsync(
+                articleId,
+                ct);
+
+            if (!referenceStock.HasValue)
+            {
+                return Results.NotFound(new
+                {
+                    saved = false,
+                    articleId,
+                    message = "Giacenza articolo non trovata."
+                });
+            }
+        }
+
+        var saved = await repository.SetSellableQuantityAsync(
+            articleId,
+            request.Quantity,
+            referenceStock,
+            ct);
+
+        if (!saved)
+        {
+            return Results.NotFound(new
+            {
+                saved = false,
+                articleId,
+                message = "Articolo non presente nei Preferiti."
+            });
+        }
+
+        return Results.Ok(new
+        {
+            saved = true,
+            articleId,
+            sellableQuantity = request.Quantity,
+            sellableReferenceStock = referenceStock
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore quantita vendibile Preferiti",
             detail: ex.Message,
             statusCode: 500);
     }
@@ -2164,7 +2273,7 @@ app.MapGet("/api/product/{barcode}/image", async (
     try
     {
         // Non memorizzare in cache i risultati senza immagine:
-        // appena viene aggiunta una foto, l'app potrÃ  visualizzarla subito.
+        // appena viene aggiunta una foto, l'app potrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  visualizzarla subito.
         response.Headers["Cache-Control"] = "no-store";
         var product = await productRepository.GetByBarcodeAsync(
             barcode,
@@ -2199,7 +2308,7 @@ app.MapGet("/api/product/{barcode}/image", async (
             return Results.NotFound(new
             {
                 message =
-                    "L'immagine Ã¨ registrata nel database, ma il file non esiste.",
+                    "L'immagine ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ registrata nel database, ma il file non esiste.",
                 articleId = product.ArticleId,
                 fileName = Path.GetFileName(imagePath)
             });
@@ -2275,7 +2384,7 @@ app.MapPost("/api/locations", async (
         {
             return Results.BadRequest(new
             {
-                message = "Il nome dell'ubicazione Ã¨ obbligatorio."
+                message = "Il nome dell'ubicazione ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ obbligatorio."
             });
         }
 
@@ -2317,7 +2426,7 @@ app.MapPut("/api/locations/{locationId:int}", async (
         {
             return Results.BadRequest(new
             {
-                message = "Il nome dell'ubicazione Ã¨ obbligatorio."
+                message = "Il nome dell'ubicazione ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ obbligatorio."
             });
         }
 
@@ -2334,7 +2443,7 @@ app.MapPut("/api/locations/{locationId:int}", async (
             LocationRenameStatus.Duplicate => Results.Conflict(new
             {
                 renamed = false,
-                message = "Esiste giÃ  un'ubicazione con questo nome.",
+                message = "Esiste giÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  un'ubicazione con questo nome.",
                 location = result.Location
             }),
 
@@ -2482,7 +2591,7 @@ app.MapPost(
                 added,
                 message = added
                     ? "Ubicazione aggiunta."
-                    : "Ubicazione giÃ  presente.",
+                    : "Ubicazione giÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  presente.",
                 locations
             });
         }
@@ -2828,7 +2937,7 @@ app.MapGet("/api/inventory-analysis/query", async (
         var modeTitle = normalizedMode switch
         {
             "never-sold" => "MAI VENDUTI",
-            "top-sold" => $"PIÃ™ VENDUTI - ULTIMI {selectedPeriodMonths} MESI",
+            "top-sold" => $"PIÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ VENDUTI - ULTIMI {selectedPeriodMonths} MESI",
             "stopped" => $"FERMI DA ALMENO {selectedPeriodMonths} MESI",
             "dead-capital" => "CAPITALE FERMO",
             "growing" => "IN CRESCITA - 12 MESI VS 12 PRECEDENTI",
@@ -2888,7 +2997,7 @@ app.MapPost("/api/inventory-analysis/report", async (
         {
             return Results.BadRequest(new
             {
-                message = "La data di valorizzazione non puÃ² essere futura."
+                message = "La data di valorizzazione non puÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â² essere futura."
             });
         }
 
@@ -2909,7 +3018,7 @@ app.MapPost("/api/inventory-analysis/report", async (
         static string Clip(string? value, int max)
         {
             var s = (value ?? "").Trim();
-            return s.Length <= max ? s : s[..Math.Max(0, max - 1)] + "â€¦";
+            return s.Length <= max ? s : s[..Math.Max(0, max - 1)] + "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦";
         }
 
         static string Classification(InventoryAnalysisItemDto x)
@@ -3020,8 +3129,8 @@ app.MapPost("/api/inventory-analysis/report", async (
   <td class="code-col">{H(x.ArticleCode)}</td>
   <td class="description-col">{H(Clip(x.Description, extendedReport ? 44 : 80))}</td>
   <td class="num qty-col">{Q(x.Quantity)}</td>
-  <td class="num cost-col">{N(unitCost)} â‚¬</td>
-  <td class="num total-col">{N(rowTotal)} â‚¬</td>
+  <td class="num cost-col">{N(unitCost)} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬</td>
+  <td class="num total-col">{N(rowTotal)} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬</td>
   {extras}
 </tr>
 """;
@@ -3031,7 +3140,7 @@ app.MapPost("/api/inventory-analysis/report", async (
                 ? $"""
 <div class="grand-total">
   <span>TOTALE VALORIZZAZIONE MAGAZZINO</span>
-  <strong>{N(totalValue)} â‚¬</strong>
+  <strong>{N(totalValue)} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬</strong>
 </div>
 """
                 : "";
@@ -3044,8 +3153,8 @@ app.MapPost("/api/inventory-analysis/report", async (
     <div class="report-subtitle">Giacenze al {{stockDate:dd/MM/yyyy}}</div>
     <div class="valuation-line">Valorizzazione: <strong>{{valuationTitle}}</strong></div>
     <div class="meta">
-      {{items.Count}} articoli Â· Giacenza {{Q(totalQuantity)}} Â· Totale {{N(totalValue)}} â‚¬ Â·
-      {{H(optionsText)}} Â· Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
+      {{items.Count}} articoli ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Giacenza {{Q(totalQuantity)}} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Totale {{N(totalValue)}} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·
+      {{H(optionsText)}} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Generato {{DateTime.Now:dd/MM/yyyy HH:mm}}
     </div>
   </div>
 
@@ -3374,7 +3483,7 @@ app.MapPost("/api/labels/print", async (
             return Results.BadRequest(new
             {
                 printed = false,
-                message = "Per ora Ã¨ disponibile soltanto la GoDEX G500."
+                message = "Per ora ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ disponibile soltanto la GoDEX G500."
             });
         }
 
@@ -3383,7 +3492,7 @@ app.MapPost("/api/labels/print", async (
             return Results.BadRequest(new
             {
                 printed = false,
-                message = "La quantitÃ  deve essere compresa tra 1 e 100."
+                message = "La quantitÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  deve essere compresa tra 1 e 100."
             });
         }
 
@@ -3528,6 +3637,9 @@ sealed record ProductPriceUpdateRequest(
 
 sealed record ProductActiveRequest(
     bool Active);
+
+sealed record FavoriteSellableQuantityRequest(
+    decimal? Quantity);
 
 sealed record StockSettingsRequest(
     int WarehouseId = 0,

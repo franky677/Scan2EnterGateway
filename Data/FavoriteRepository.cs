@@ -9,6 +9,8 @@ public sealed record FavoriteRecord(
     string Description,
     string PublicPrice,
     string Stock,
+    decimal? SellableQuantity,
+    decimal? SellableReferenceStock,
     string AddedAtUtc);
 
 public sealed record FavoriteUpsertRequest(
@@ -54,6 +56,8 @@ public sealed class FavoriteRepository
                 COALESCE(Description, ''),
                 COALESCE(PublicPrice, ''),
                 COALESCE(Stock, ''),
+                SellableQuantity,
+                SellableReferenceStock,
                 AddedAtUtc
             FROM Favorites
             ORDER BY AddedAtUtc ASC, ArticleId ASC;
@@ -71,7 +75,9 @@ public sealed class FavoriteRepository
                     reader.GetString(3),
                     reader.GetString(4),
                     reader.GetString(5),
-                    reader.GetString(6)));
+                    reader.IsDBNull(6) ? null : reader.GetDecimal(6),
+                    reader.IsDBNull(7) ? null : reader.GetDecimal(7),
+                    reader.GetString(8)));
         }
 
         return result;
@@ -117,6 +123,48 @@ public sealed class FavoriteRepository
         command.Parameters.AddWithValue("$publicPrice", request.PublicPrice?.Trim() ?? "");
         command.Parameters.AddWithValue("$stock", request.Stock?.Trim() ?? "");
         command.Parameters.AddWithValue("$addedAtUtc", DateTimeOffset.UtcNow.ToString("O"));
+
+        return await command.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<bool> SetSellableQuantityAsync(
+        long articleId,
+        decimal? sellableQuantity,
+        decimal? referenceStock,
+        CancellationToken ct = default)
+    {
+        if (articleId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(articleId));
+
+        if (sellableQuantity < 0)
+            throw new ArgumentOutOfRangeException(nameof(sellableQuantity));
+
+        await EnsureInitializedAsync(ct);
+
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(ct);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Favorites
+            SET
+                SellableQuantity = $sellableQuantity,
+                SellableReferenceStock = $referenceStock
+            WHERE ArticleId = $articleId;
+            """;
+
+        command.Parameters.AddWithValue("$articleId", articleId);
+        command.Parameters.AddWithValue(
+            "$sellableQuantity",
+            sellableQuantity.HasValue
+                ? sellableQuantity.Value
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$referenceStock",
+            referenceStock.HasValue
+                ? referenceStock.Value
+                : DBNull.Value);
 
         return await command.ExecuteNonQueryAsync(ct) > 0;
     }
@@ -183,7 +231,9 @@ public sealed class FavoriteRepository
                         ArticleCode TEXT NOT NULL DEFAULT '',
                         Description TEXT NOT NULL DEFAULT '',
                         PublicPrice TEXT NOT NULL DEFAULT '',
-                        Stock TEXT NOT NULL DEFAULT ''
+                        Stock TEXT NOT NULL DEFAULT '',
+                        SellableQuantity REAL NULL,
+                        SellableReferenceStock REAL NULL
                     );
                     """;
 
@@ -196,7 +246,9 @@ public sealed class FavoriteRepository
                 "ALTER TABLE Favorites ADD COLUMN ArticleCode TEXT NOT NULL DEFAULT '';",
                 "ALTER TABLE Favorites ADD COLUMN Description TEXT NOT NULL DEFAULT '';",
                 "ALTER TABLE Favorites ADD COLUMN PublicPrice TEXT NOT NULL DEFAULT '';",
-                "ALTER TABLE Favorites ADD COLUMN Stock TEXT NOT NULL DEFAULT '';"
+                "ALTER TABLE Favorites ADD COLUMN Stock TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE Favorites ADD COLUMN SellableQuantity REAL NULL;",
+                "ALTER TABLE Favorites ADD COLUMN SellableReferenceStock REAL NULL;"
             })
             {
                 try
