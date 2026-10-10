@@ -38,6 +38,7 @@ builder.Services.AddSingleton<SessionRepository>();
 builder.Services.AddSingleton<ClientPriceRepository>();
 builder.Services.AddSingleton<CustomerRepository>();
 builder.Services.AddSingleton<ColloRepository>();
+builder.Services.AddSingleton<DeliveryReportEmailRepository>();
 builder.Services.AddSingleton<FavoriteRepository>();
 builder.Services.AddSingleton<SalesRepository>();
 builder.Services.AddSingleton<InventoryAnalysisRepository>();
@@ -45,12 +46,14 @@ builder.Services.AddSingleton<ProductExpiryRepository>();
 builder.Services.AddSingleton<LabelBitmapRenderer>();
 builder.Services.AddSingleton<WindowsLabelPrinter>();
 builder.Services.AddSingleton<GodexLabelPrinter>();
+builder.Services.AddSingleton<DeliveryReportEmailService>();
 builder.Services.AddSingleton<GatewayRuntimeInfo>();
 
 builder.Services.AddCors(o => o.AddPolicy("Scan2Enter", p =>
     p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
+var deliveryReportEmailSendLock = new SemaphoreSlim(1, 1);
 var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("GatewayLifecycle");
 var runtimeInfo = app.Services.GetRequiredService<GatewayRuntimeInfo>();
 
@@ -3464,6 +3467,240 @@ app.MapGet("/api/inventory-analysis/classifications", async (
 });
 
 
+app.MapPost("/api/delivery-report-email/send", async (
+    DeliveryReportEmailRequest request,
+    ColloRepository colloRepository,
+    DeliveryReportEmailRepository emailRepository,
+    DeliveryReportEmailService emailService,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (request.TestataId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                sent = false,
+                message = "Testata collo non valida."
+            });
+        }
+
+        var collo =
+            await colloRepository.GetHistoryDetailAsync(
+                request.TestataId,
+                ct);
+
+        if (collo is null)
+        {
+            return Results.NotFound(new
+            {
+                sent = false,
+                message = "Collo non trovato."
+            });
+        }
+
+        if (!await emailRepository.IsEnabledForClientAsync(collo.ClientId, ct))
+        {
+            return Results.Ok(new
+            {
+                sent = false,
+                skipped = true,
+                alreadySent = false,
+                message = "Invio automatico non abilitato per questo cliente."
+            });
+        }
+        await deliveryReportEmailSendLock.WaitAsync(ct);
+
+        try
+        {
+            if (await emailRepository.WasSentAsync(
+                collo.TestataId,
+                ct))
+            {
+                return Results.Ok(new
+                {
+                    sent = false,
+                    skipped = true,
+                    alreadySent = true,
+                    message = "Rapportino gia inviato per questo collo."
+                });
+            }
+
+            var recipient =
+                await emailRepository.GetRecipientEmailAsync(
+                    collo.ClientId,
+                    ct);
+
+            if (string.IsNullOrWhiteSpace(recipient))
+            {
+                return Results.BadRequest(new
+                {
+                    sent = false,
+                    message = "Email cliente non configurata."
+                });
+            }
+
+            byte[] pdfBytes;
+
+            try
+            {
+                pdfBytes =
+                    Convert.FromBase64String(
+                        request.PdfBase64 ?? "");
+            }
+            catch (FormatException)
+            {
+                return Results.BadRequest(new
+                {
+                    sent = false,
+                    message = "PDF rapportino non valido."
+                });
+            }
+
+            if (pdfBytes.Length == 0)
+            {
+                return Results.BadRequest(new
+                {
+                    sent = false,
+                    message = "PDF rapportino vuoto."
+                });
+            }
+
+            if (pdfBytes.Length > 5 * 1024 * 1024)
+            {
+                return Results.BadRequest(new
+                {
+                    sent = false,
+                    message = "PDF rapportino troppo grande."
+                });
+            }
+
+            var subject =
+                $"Rapportino consegna merce - {collo.ClientName} - Collo {collo.NumeroCollo}";
+
+            const string body =
+                "Buongiorno,\r\n" +
+                "in allegato il rapportino relativo alla consegna della merce.\r\n\r\n" +
+                "Cordiali saluti\r\n" +
+                "De Pieri Franco";
+
+            var fileName =
+                $"RapportinoConsegna_{collo.NumeroCollo}.pdf";
+
+            await emailService.SendAsync(
+                recipient,
+                collo.ClientName,
+                subject,
+                body,
+                pdfBytes,
+                fileName,
+                ct);
+
+            await emailRepository.MarkSentAsync(
+                collo.TestataId,
+                collo.ClientId,
+                collo.NumeroCollo,
+                recipient,
+                ct);
+
+            return Results.Ok(new
+            {
+                sent = true,
+                skipped = false,
+                alreadySent = false,
+                collo = collo.NumeroCollo
+            });
+        }
+        finally
+        {
+            deliveryReportEmailSendLock.Release();
+        }
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore invio email rapportino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapGet("/api/delivery-report-email/client/{clientId:int}", async (
+    int clientId,
+    DeliveryReportEmailRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var enabled =
+            await repository.IsEnabledForClientAsync(clientId, ct);
+
+
+        var recipient =
+            await repository.GetRecipientEmailAsync(
+                clientId,
+                ct);
+
+        return Results.Ok(new
+        {
+            enabled = enabled,
+            recipientConfigured =
+                !string.IsNullOrWhiteSpace(recipient)
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore configurazione email rapportino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+
+app.MapPut("/api/delivery-report-email/client/{clientId:int}", async (
+    int clientId,
+    DeliveryReportEmailClientConfigRequest request,
+    DeliveryReportEmailRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (clientId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                message = "Cliente non valido."
+            });
+        }
+
+        await repository.SetEnabledForClientAsync(
+            clientId,
+            request.Enabled,
+            ct);
+
+        var recipient =
+            await repository.GetRecipientEmailAsync(
+                clientId,
+                ct);
+
+        return Results.Ok(new
+        {
+            enabled = request.Enabled,
+            recipientConfigured =
+                !string.IsNullOrWhiteSpace(recipient)
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore configurazione email rapportino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 app.MapPost("/api/labels/print", async (
     LabelPrintRequest request,
     ProductRepository productRepository,
@@ -3649,6 +3886,13 @@ sealed record StockSettingsRequest(
     decimal? MinimumStock = null,
     decimal? MaximumStock = null,
     decimal? ReorderLot = null);
+
+sealed record DeliveryReportEmailRequest(
+    int TestataId,
+    string PdfBase64);
+sealed record DeliveryReportEmailClientConfigRequest(
+    bool Enabled);
+
 
 sealed record LabelPrintRequest(
     string ArticleCode,
