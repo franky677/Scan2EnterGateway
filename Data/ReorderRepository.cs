@@ -50,6 +50,28 @@ END;
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    private static async Task EnsureReorderSuspensionTableAsync(
+        SqlConnection connection,
+        CancellationToken ct)
+    {
+        const string sql = """
+IF OBJECT_ID('dbo.Scan2EnterReorderSuspension', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Scan2EnterReorderSuspension
+    (
+        IdArticolo int NOT NULL,
+        IdMagazzino int NOT NULL,
+        SospesoFino datetime NOT NULL,
+        DataAgg datetime NOT NULL DEFAULT GETDATE(),
+        CONSTRAINT PK_Scan2EnterReorderSuspension
+            PRIMARY KEY (IdArticolo, IdMagazzino)
+    );
+END;
+""";
+
+        await using var command = new SqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(ct);
+    }
     public async Task<IReadOnlyList<ReorderArticle>> GetReorderListAsync(
         CancellationToken ct)
     {
@@ -88,7 +110,7 @@ INNER JOIN dbo.tabGiacenze AS g
 
 /*
  * MULTI-FORNITORE:
- * una stessa necessità di riordino viene esposta una volta per ogni
+ * una stessa necessitÃ  di riordino viene esposta una volta per ogni
  * fornitore associato all'articolo. Il fabbisogno resta dell'articolo:
  * quando NeedsReorder() diventa false non viene restituita nessuna riga,
  * quindi l'articolo scompare contemporaneamente da tutti i fornitori.
@@ -116,6 +138,14 @@ OUTER APPLY
 ) AS b
 
 WHERE s.idMagazzino = @warehouseId
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM dbo.Scan2EnterReorderSuspension AS rs
+      WHERE rs.IdArticolo = a.idArticolo
+        AND rs.IdMagazzino = s.idMagazzino
+        AND rs.SospesoFino > GETDATE()
+  )
 
 ORDER BY
     COALESCE(f.Fornitore, ''),
@@ -130,6 +160,7 @@ ORDER BY
         await connection.OpenAsync(ct);
 
         await EnsureSupplierSelectionTableAsync(connection, ct);
+        await EnsureReorderSuspensionTableAsync(connection, ct);
 
         await using var command = new SqlCommand(sql, connection);
         command.Parameters.AddWithValue("@warehouseId", warehouseId);
@@ -330,7 +361,7 @@ WHERE IdArticolo = @articleId
             if (count <= 0)
             {
                 throw new InvalidOperationException(
-                    $"Il fornitore {supplierId} non è associato " +
+                    $"Il fornitore {supplierId} non Ã¨ associato " +
                     $"all'articolo {articleId}.");
             }
         }
@@ -512,7 +543,7 @@ END;
             /*
              * La scelta fornitore vale per il ciclo di riordino corrente.
              * La azzeriamo solo quando una modifica di scorta rende davvero
-             * l'articolo non più da riordinare.
+             * l'articolo non piÃ¹ da riordinare.
              */
             const string reorderStateSql = """
 SELECT
@@ -604,6 +635,83 @@ WHERE IdArticolo = @articleId
         }
     }
 
+    public async Task<DateTime> SuspendReorderAsync(
+        int articleId,
+        int warehouseId,
+        CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await EnsureReorderSuspensionTableAsync(connection, ct);
+
+        const string sql = """
+DECLARE @SospesoFino datetime = DATEADD(month, 6, GETDATE());
+
+MERGE dbo.Scan2EnterReorderSuspension AS target
+USING
+(
+    SELECT
+        @articleId AS IdArticolo,
+        @warehouseId AS IdMagazzino
+) AS source
+ON target.IdArticolo = source.IdArticolo
+AND target.IdMagazzino = source.IdMagazzino
+
+WHEN MATCHED THEN
+    UPDATE SET
+        SospesoFino = @SospesoFino,
+        DataAgg = GETDATE()
+
+WHEN NOT MATCHED THEN
+    INSERT
+    (
+        IdArticolo,
+        IdMagazzino,
+        SospesoFino,
+        DataAgg
+    )
+    VALUES
+    (
+        @articleId,
+        @warehouseId,
+        @SospesoFino,
+        GETDATE()
+    );
+
+SELECT @SospesoFino;
+""";
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
+
+        var value = await command.ExecuteScalarAsync(ct);
+
+        return Convert.ToDateTime(value);
+    }
+    public async Task<bool> ResumeReorderAsync(
+        int articleId,
+        int warehouseId,
+        CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await EnsureReorderSuspensionTableAsync(connection, ct);
+
+        const string sql = """
+DELETE FROM dbo.Scan2EnterReorderSuspension
+WHERE IdArticolo = @articleId
+  AND IdMagazzino = @warehouseId;
+""";
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@articleId", articleId);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
+
+        return await command.ExecuteNonQueryAsync(ct) > 0;
+    }
     private static bool NeedsReorder(
         decimal? stock,
         decimal? available,

@@ -378,6 +378,79 @@ app.MapDelete("/api/reorder-list/{articleId:int}/supplier", async (
 });
 
 
+app.MapPut("/api/reorder-list/{articleId:int}/suspension", async (
+    int articleId,
+    int? warehouseId,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        if (articleId <= 0)
+        {
+            return Results.BadRequest(new
+            {
+                suspended = false,
+                message = "Articolo non valido."
+            });
+        }
+
+        var wh = warehouseId ?? 0;
+
+        var suspendedUntil = await repository.SuspendReorderAsync(
+            articleId,
+            wh,
+            ct);
+
+        return Results.Ok(new
+        {
+            suspended = true,
+            articleId,
+            warehouseId = wh,
+            suspendedUntil
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore sospensione articolo dal riordino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
+app.MapDelete("/api/reorder-list/{articleId:int}/suspension", async (
+    int articleId,
+    int? warehouseId,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var wh = warehouseId ?? 0;
+
+        var removed = await repository.ResumeReorderAsync(
+            articleId,
+            wh,
+            ct);
+
+        return Results.Ok(new
+        {
+            resumed = true,
+            articleId,
+            warehouseId = wh,
+            suspensionRemoved = removed
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore riattivazione articolo nel riordino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 app.MapGet("/api/public/product/{barcode}", async (
     string barcode,
     ProductRepository repository,
