@@ -635,6 +635,68 @@ WHERE IdArticolo = @articleId
         }
     }
 
+    public async Task<IReadOnlyList<ReorderSuspension>> GetReorderSuspensionsAsync(
+        int warehouseId,
+        CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await EnsureReorderSuspensionTableAsync(connection, ct);
+
+        const string sql = """
+SELECT
+    rs.IdArticolo,
+    a.CodiceArticolo,
+    a.Descrizione,
+    b.Barcode,
+    rs.IdMagazzino,
+    rs.SospesoFino
+FROM dbo.Scan2EnterReorderSuspension AS rs
+INNER JOIN dbo.tabArticoli AS a
+    ON a.idArticolo = rs.IdArticolo
+
+OUTER APPLY
+(
+    SELECT TOP (1) tb.Barcode
+    FROM dbo.tabBarcode AS tb
+    WHERE tb.idArticolo = rs.IdArticolo
+      AND NULLIF(LTRIM(RTRIM(tb.Barcode)), '') IS NOT NULL
+    ORDER BY tb.Barcode
+) AS b
+
+WHERE rs.IdMagazzino = @warehouseId
+  AND rs.SospesoFino > GETDATE()
+
+ORDER BY
+    rs.SospesoFino,
+    a.Descrizione,
+    a.CodiceArticolo;
+""";
+
+        var items = new List<ReorderSuspension>();
+
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@warehouseId", warehouseId);
+        command.CommandTimeout = 60;
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+
+        while (await reader.ReadAsync(ct))
+        {
+            items.Add(new ReorderSuspension
+            {
+                IdArticle = Convert.ToInt32(reader["IdArticolo"]),
+                ArticleCode = Text(reader, "CodiceArticolo") ?? "",
+                Description = Text(reader, "Descrizione") ?? "",
+                Barcode = Text(reader, "Barcode"),
+                WarehouseId = Convert.ToInt32(reader["IdMagazzino"]),
+                SuspendedUntil = Convert.ToDateTime(reader["SospesoFino"])
+            });
+        }
+
+        return items;
+    }
     public async Task<DateTime> SuspendReorderAsync(
         int articleId,
         int warehouseId,

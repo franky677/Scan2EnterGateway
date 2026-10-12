@@ -378,6 +378,38 @@ app.MapDelete("/api/reorder-list/{articleId:int}/supplier", async (
 });
 
 
+app.MapGet("/api/reorder-list/suspensions", async (
+    int? warehouseId,
+    ReorderRepository repository,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var wh = warehouseId ?? 0;
+
+        if (wh < 0)
+        {
+            return Results.BadRequest(new
+            {
+                message = "Magazzino non valido."
+            });
+        }
+
+        var items = await repository.GetReorderSuspensionsAsync(
+            wh,
+            ct);
+
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Errore lettura articoli sospesi dal riordino",
+            detail: ex.Message,
+            statusCode: 500);
+    }
+});
+
 app.MapPut("/api/reorder-list/{articleId:int}/suspension", async (
     int articleId,
     int? warehouseId,
