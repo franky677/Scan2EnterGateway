@@ -57,6 +57,41 @@ public sealed class DeliveryReportEmailRepository
                Convert.ToInt32(value) != 0;
     }
 
+    public async Task<bool> GetShowPricesForClientAsync(
+        int clientId,
+        CancellationToken cancellationToken = default)
+    {
+        if (clientId <= 0)
+        {
+            return true;
+        }
+
+        await EnsureInitializedAsync(cancellationToken);
+
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT ShowPrices
+            FROM DeliveryReportEmailClients
+            WHERE ClientId = $clientId
+            LIMIT 1;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$clientId",
+            clientId);
+
+        var value =
+            await command.ExecuteScalarAsync(
+                cancellationToken);
+
+        return value is null ||
+               Convert.ToInt32(value) != 0;
+    }
+
     public async Task SetEnabledForClientAsync(
         int clientId,
         bool enabled,
@@ -100,6 +135,60 @@ public sealed class DeliveryReportEmailRepository
         command.Parameters.AddWithValue(
             "$enabled",
             enabled ? 1 : 0);
+
+        command.Parameters.AddWithValue(
+            "$updatedAtUtc",
+            DateTimeOffset.UtcNow.ToString("O"));
+
+        await command.ExecuteNonQueryAsync(
+            cancellationToken);
+    }
+
+    public async Task SetShowPricesForClientAsync(
+        int clientId,
+        bool showPrices,
+        CancellationToken cancellationToken = default)
+    {
+        if (clientId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(clientId));
+        }
+
+        await EnsureInitializedAsync(cancellationToken);
+
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO DeliveryReportEmailClients
+            (
+                ClientId,
+                Enabled,
+                ShowPrices,
+                UpdatedAtUtc
+            )
+            VALUES
+            (
+                $clientId,
+                0,
+                $showPrices,
+                $updatedAtUtc
+            )
+            ON CONFLICT(ClientId) DO UPDATE SET
+                ShowPrices = excluded.ShowPrices,
+                UpdatedAtUtc = excluded.UpdatedAtUtc;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$clientId",
+            clientId);
+
+        command.Parameters.AddWithValue(
+            "$showPrices",
+            showPrices ? 1 : 0);
 
         command.Parameters.AddWithValue(
             "$updatedAtUtc",
@@ -304,6 +393,7 @@ public sealed class DeliveryReportEmailRepository
                 (
                     ClientId INTEGER NOT NULL PRIMARY KEY,
                     Enabled INTEGER NOT NULL DEFAULT 0,
+                    ShowPrices INTEGER NOT NULL DEFAULT 1,
                     UpdatedAtUtc TEXT NOT NULL
                 );
 
@@ -323,6 +413,25 @@ public sealed class DeliveryReportEmailRepository
 
             await command.ExecuteNonQueryAsync(
                 cancellationToken);
+
+            try
+            {
+                await using var alter = connection.CreateCommand();
+                alter.CommandText =
+                    "ALTER TABLE DeliveryReportEmailClients ADD COLUMN ShowPrices INTEGER NOT NULL DEFAULT 1;";
+
+                await alter.ExecuteNonQueryAsync(
+                    cancellationToken);
+            }
+            catch (SqliteException ex)
+            {
+                if (!ex.Message.Contains(
+                    "duplicate column name",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    throw;
+                }
+            }
 
             _initialized = true;
         }

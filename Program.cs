@@ -3742,6 +3742,11 @@ app.MapGet("/api/delivery-report-email/client/{clientId:int}", async (
             await repository.IsEnabledForClientAsync(clientId, ct);
 
 
+        var showPrices =
+            await repository.GetShowPricesForClientAsync(
+                clientId,
+                ct);
+
         var recipient =
             await repository.GetRecipientEmailAsync(
                 clientId,
@@ -3750,6 +3755,7 @@ app.MapGet("/api/delivery-report-email/client/{clientId:int}", async (
         return Results.Ok(new
         {
             enabled = enabled,
+            showPrices = showPrices,
             recipientConfigured =
                 !string.IsNullOrWhiteSpace(recipient)
         });
@@ -3785,6 +3791,19 @@ app.MapPut("/api/delivery-report-email/client/{clientId:int}", async (
             request.Enabled,
             ct);
 
+        if (request.ShowPrices.HasValue)
+        {
+            await repository.SetShowPricesForClientAsync(
+                clientId,
+                request.ShowPrices.Value,
+                ct);
+        }
+
+        var showPrices =
+            await repository.GetShowPricesForClientAsync(
+                clientId,
+                ct);
+
         var recipient =
             await repository.GetRecipientEmailAsync(
                 clientId,
@@ -3793,6 +3812,7 @@ app.MapPut("/api/delivery-report-email/client/{clientId:int}", async (
         return Results.Ok(new
         {
             enabled = request.Enabled,
+            showPrices = showPrices,
             recipientConfigured =
                 !string.IsNullOrWhiteSpace(recipient)
         });
@@ -3996,7 +4016,8 @@ sealed record DeliveryReportEmailRequest(
     int TestataId,
     string PdfBase64);
 sealed record DeliveryReportEmailClientConfigRequest(
-    bool Enabled);
+    bool Enabled,
+    bool? ShowPrices = null);
 
 
 sealed record LabelPrintRequest(
