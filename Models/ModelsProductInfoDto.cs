@@ -36,6 +36,8 @@ public class ProductInfoDto
 
     public string ReorderLot { get; set; } = "";
 
+    public string AcquisitionQuantity { get; set; } = "";
+
     public long SupplierId { get; set; }
 
     public string SupplierName { get; set; } = "";

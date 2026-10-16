@@ -46,6 +46,7 @@ public sealed class ProductRepository
                 s.ScortaMinima,
                 s.ScortaMassima,
                 s.LottoRiordino,
+                a.Quantita AS AcquisitionQuantity,
                 af.IdFornitore,
                 af.CodiceArticoloFornitore,
                 f.Fornitore AS SupplierName,
@@ -149,6 +150,7 @@ public sealed class ProductRepository
             MinimumStock = GetNullableStockValue(reader, "ScortaMinima"),
             MaximumStock = GetNullableStockValue(reader, "ScortaMassima"),
             ReorderLot = GetNullableStockValue(reader, "LottoRiordino"),
+            AcquisitionQuantity = GetNumberAsString(reader, "AcquisitionQuantity"),
 
             SupplierId = GetInt64(reader, "IdFornitore"),
             SupplierName = GetString(reader, "SupplierName"),
